@@ -1,0 +1,11 @@
+[2026-11-09 23:16:57] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-09 23:18:14] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-09 23:18:16] Mở ảnh thành công: hehehe.jpg (1958 x 1080 px).
+[2026-11-09 23:18:28] Áp dụng Cân bằng histogram thành công trong 475.4 ms.
+[2026-11-09 23:18:38] Áp dụng Kéo giãn tương phản thành công trong 48.9 ms.
+[2026-11-09 23:18:46] Phân đoạn Otsu: Ngưỡng gốc T=69, Ngưỡng sau nâng cao T=70 | IoU=99.55%, Dice=99.78%, Sai khác=0.12%.
+[2026-11-09 23:19:02] Thay đổi chế độ xem phân đoạn Otsu: Phủ màu đối tượng (Color Overlay).
+[2026-11-09 23:19:05] Thay đổi chế độ xem phân đoạn Otsu: Tách riêng đối tượng (Cutout).
+[2026-11-09 23:19:13] Đã nạp Ground Truth: thiennhien.jpg.
+[2026-11-09 23:19:26] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-09 23:19:43] Khởi động hệ thống xử lý ảnh Đề tài 13.

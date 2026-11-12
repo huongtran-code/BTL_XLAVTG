@@ -1,0 +1,9 @@
+[2026-11-12 14:19:12] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-12 14:19:25] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-12 14:19:26] Mở ảnh thành công: sample_test.png (640 x 480 px).
+[2026-11-12 14:30:46] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-12 16:29:26] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-12 16:29:54] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-12 16:29:55] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-12 16:33:32] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=148 | IoU=100.00%, Dice=100.00%, Sai khác=0.00%.
+[2026-11-12 18:07:10] Đóng ứng dụng và kết thúc phiên làm việc.

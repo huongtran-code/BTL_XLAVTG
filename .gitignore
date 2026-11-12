@@ -1,0 +1,15 @@
+# Môi trường ảo Python
+.venv/
+venv/
+env/
+
+# Tệp biên dịch cache của Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cấu hình trình soạn thảo & Hệ điều hành
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
