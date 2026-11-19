@@ -271,18 +271,21 @@ class ImageCanvas(QWidget):
     Widget hiển thị ảnh chuyên dụng:
     - Tự động căn giữa, bảo toàn đúng tỷ lệ gốc (KeepAspectRatio).
     - Khắc phục triệt để lỗi phình layout của QLabel.setPixmap.
-    - Hỗ trợ kéo thả tệp ảnh trực tiếp và nhấp đúp để phóng to.
+    - Hỗ trợ kéo thả tệp ảnh trực tiếp (với hiệu ứng nhận diện) và nhấp đúp để phóng to.
     """
     file_dropped = Signal(str)
     double_clicked = Signal()
 
-    def __init__(self, placeholder="Chưa có ảnh", parent=None):
+    def __init__(self, placeholder="Chưa có ảnh", subtext="", accept_drop=False, parent=None):
         super().__init__(parent)
         self.image = None
         self.qimage = None
         self.gray_view = False
         self.placeholder = placeholder
-        self.setAcceptDrops(True)
+        self.subtext = subtext
+        self._accept_drop = accept_drop
+        self._is_dragging = False
+        self.setAcceptDrops(accept_drop)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(120, 90)
 
@@ -298,6 +301,7 @@ class ImageCanvas(QWidget):
             self.gray_view = gray_view
         if image is None:
             self.qimage = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
         else:
             show = to_gray(image) if (self.gray_view and image.ndim == 3) else image
             if show.ndim == 2:
@@ -310,7 +314,46 @@ class ImageCanvas(QWidget):
                 h, w, _ = data.shape
                 self.qimage = QImage(data.data, w, h, data.strides[0],
                                      QImage.Format.Format_RGB888).copy()
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.update()
+
+    def _draw_empty_icon(self, p: QPainter, cx: float, cy: float, active: bool):
+        """Vẽ biểu tượng khung ảnh / tải lên tối giản bằng vector sắc nét."""
+        stroke = QColor("#1B56B5" if active else "#64748B")
+        fill_bg = QColor("#DBEAFE" if active else "#EEF2F7")
+
+        # Nền tròn nhạt bao quanh biểu tượng
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(fill_bg))
+        p.drawEllipse(QPointF(cx, cy), 22, 22)
+
+        pen = QPen(stroke, 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        if self._accept_drop:
+            # Biểu tượng mũi tên tải lên + khay nhận ảnh
+            p.drawLine(QPointF(cx, cy + 5), QPointF(cx, cy - 8))
+            p.drawLine(QPointF(cx, cy - 8), QPointF(cx - 5.5, cy - 2.5))
+            p.drawLine(QPointF(cx, cy - 8), QPointF(cx + 5.5, cy - 2.5))
+            tray = QPainterPath()
+            tray.moveTo(cx - 10, cy + 4)
+            tray.lineTo(cx - 10, cy + 9)
+            tray.lineTo(cx + 10, cy + 9)
+            tray.lineTo(cx + 10, cy + 4)
+            p.drawPath(tray)
+        else:
+            # Biểu tượng khung ảnh tối giản
+            frame_rect = QRectF(cx - 11, cy - 8.5, 22, 17)
+            p.drawRoundedRect(frame_rect, 3, 3)
+            p.drawEllipse(QPointF(cx - 4.5, cy - 2.5), 2.0, 2.0)
+            mtn = QPainterPath()
+            mtn.moveTo(cx - 8.5, cy + 6)
+            mtn.lineTo(cx - 2.5, cy + 0.5)
+            mtn.lineTo(cx + 2.0, cy + 4.5)
+            mtn.lineTo(cx + 5.5, cy + 1.5)
+            mtn.lineTo(cx + 9.0, cy + 6)
+            p.drawPath(mtn)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -321,19 +364,59 @@ class ImageCanvas(QWidget):
         clip = QPainterPath()
         clip.addRoundedRect(rect, 8, 8)
         p.setClipPath(clip)
-        p.fillRect(self.rect(), QColor("#F4F7FB" if self.qimage is None else "#242B33"))
-        p.setClipping(False)
-
-        p.setPen(QPen(QColor("#D5DCE6"), 1))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(rect, 8, 8)
 
         if self.qimage is None:
-            p.setPen(QColor("#7B8794"))
-            p.drawText(self.rect().adjusted(12, 0, -12, 0),
-                       Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
-                       self.placeholder)
+            bg_color = "#EFF6FF" if self._is_dragging else "#F8FAFC"
+            p.fillRect(self.rect(), QColor(bg_color))
+        else:
+            p.fillRect(self.rect(), QColor("#1C2128"))
+
+        p.setClipping(False)
+
+        if self.qimage is None:
+            # Viền nét đứt chuyên nghiệp khi đang ở trạng thái trống
+            border_color = QColor("#1B56B5" if self._is_dragging else "#CBD5E1")
+            pen_style = Qt.PenStyle.DashLine if self._accept_drop or self._is_dragging else Qt.PenStyle.SolidLine
+            p.setPen(QPen(border_color, 1.5 if self._is_dragging else 1.2, pen_style))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            inner_rect = rect.adjusted(1.0, 1.0, -1.0, -1.0)
+            p.drawRoundedRect(inner_rect, 8, 8)
+
+            w, h = self.width(), self.height()
+            show_rich = (w >= 210 and h >= 135)
+
+            if show_rich:
+                cx = w / 2.0
+                cy = h / 2.0 - (18 if self.subtext else 10)
+                self._draw_empty_icon(p, cx, cy - 10, self._is_dragging)
+
+                title_font = QFont("Segoe UI", 10, QFont.Weight.DemiBold)
+                p.setFont(title_font)
+                p.setPen(QColor("#1B56B5" if self._is_dragging else "#1E293B"))
+                title_rect = QRectF(16, cy + 18, w - 32, 24)
+                p.drawText(title_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
+                           "Thả tệp ảnh để mở ngay" if self._is_dragging else self.placeholder)
+
+                if self.subtext:
+                    sub_font = QFont("Segoe UI", 9, QFont.Weight.Normal)
+                    p.setFont(sub_font)
+                    p.setPen(QColor("#64748B"))
+                    sub_rect = QRectF(16, cy + 42, w - 32, 34)
+                    p.drawText(sub_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
+                               self.subtext)
+            else:
+                small_font = QFont("Segoe UI", 9, QFont.Weight.Medium)
+                p.setFont(small_font)
+                p.setPen(QColor("#64748B"))
+                p.drawText(self.rect().adjusted(10, 0, -10, 0),
+                           Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                           self.placeholder)
             return
+
+        # Viền mảnh quanh khung ảnh đã tải
+        p.setPen(QPen(QColor("#CBD5E1"), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(rect, 8, 8)
 
         aw, ah = self.width() - 14, self.height() - 14
         iw, ih = self.qimage.width(), self.qimage.height()
@@ -345,19 +428,44 @@ class ImageCanvas(QWidget):
         target = QRectF(self.width() / 2 - dw / 2, self.height() / 2 - dh / 2, dw, dh)
 
         img_clip = QPainterPath()
-        img_clip.addRoundedRect(target, 5, 5)
+        img_clip.addRoundedRect(target, 4, 4)
         p.setClipPath(img_clip)
         p.drawImage(target, self.qimage)
+        p.setClipping(False)
+
+        # Gợi ý phóng to tinh tế ở góc dưới phải khi khung đủ lớn
+        if self.width() >= 270 and self.height() >= 150:
+            hint_text = "Nhấp đúp để phóng to"
+            hint_font = QFont("Segoe UI", 8, QFont.Weight.Medium)
+            p.setFont(hint_font)
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(hint_text)
+            th = fm.height()
+            pill = QRectF(self.width() - tw - 24, self.height() - th - 14, tw + 16, th + 6)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(QColor(15, 23, 42, 165)))
+            p.drawRoundedRect(pill, 5, 5)
+            p.setPen(QColor("#F1F5F9"))
+            p.drawText(pill, Qt.AlignmentFlag.AlignCenter, hint_text)
 
     def mouseDoubleClickEvent(self, event):
         if self.image is not None:
             self.double_clicked.emit()
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if self._accept_drop and event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self._is_dragging = True
+            self.update()
+
+    def dragLeaveEvent(self, event):
+        if self._is_dragging:
+            self._is_dragging = False
+            self.update()
 
     def dropEvent(self, event):
+        self._is_dragging = False
+        self.update()
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
@@ -370,23 +478,27 @@ class ZoomDialog(QDialog):
     def __init__(self, title, image, parent=None):
         super().__init__(parent)
         h, w = image.shape[:2]
-        self.setWindowTitle(f"{title} - {w} x {h} px")
-        self.resize(920, 680)
+        self.setWindowTitle(f"{title} — {w} × {h} px")
+        self.resize(960, 700)
+        self.setStyleSheet("QDialog { background: #F4F6F9; }")
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 12)
         canvas = ImageCanvas()
         canvas.set_image(image)
         lay.addWidget(canvas)
 
 
 class PlotCanvas(FigureCanvas):
-    """Widget vẽ đồ thị matplotlib trang nhã, sắc nét."""
+    """Widget vẽ đồ thị matplotlib sắc nét, đồng bộ phông chữ hệ thống."""
     def __init__(self, parent=None):
-        self.figure = Figure(figsize=(4, 2.2), dpi=100, facecolor="white")
+        self.figure = Figure(figsize=(4, 2.2), dpi=100, facecolor="#FFFFFF")
         plt_rc = {
-            "axes.edgecolor": "#C5CED9",
-            "axes.labelcolor": "#52606D",
-            "xtick.color": "#52606D",
-            "ytick.color": "#52606D"
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Segoe UI", "Tahoma", "DejaVu Sans"],
+            "axes.edgecolor": "#CBD5E1",
+            "axes.labelcolor": "#334155",
+            "xtick.color": "#475569",
+            "ytick.color": "#475569",
         }
         matplotlib.rcParams.update(plt_rc)
         super().__init__(self.figure)
@@ -397,38 +509,56 @@ class PlotCanvas(FigureCanvas):
     def _axes(self, title):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
-        ax.set_title(title, fontsize=8.5, fontweight="bold", color="#243B53")
+        ax.set_facecolor("#FFFFFF")
+        ax.set_title(title, fontsize=10, fontweight="bold", color="#0F172A", pad=8)
         ax.set_xlim(0, 255)
-        ax.set_xlabel("Mức xám", fontsize=8)
-        ax.set_ylabel("Số pixel", fontsize=8)
-        ax.tick_params(labelsize=7)
-        ax.grid(True, linewidth=0.5, color="#E4E9F0")
+        ax.set_xlabel("Mức xám (0 - 255)", fontsize=8.5, fontweight="semibold", color="#334155")
+        ax.set_ylabel("Số pixel", fontsize=8.5, fontweight="semibold", color="#334155")
+        ax.tick_params(labelsize=8, colors="#475569")
+        ax.grid(True, linewidth=0.6, linestyle="--", color="#E2E8F0")
+        ax.set_axisbelow(True)
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
+        for sp in ("bottom", "left"):
+            ax.spines[sp].set_color("#CBD5E1")
+            ax.spines[sp].set_linewidth(1.0)
         return ax
 
     def draw_histogram(self, gray, title, threshold=None):
         ax = self._axes(title)
         if gray is not None:
             hist = calculate_histogram(gray)
-            ax.bar(np.arange(256), hist, width=1.0, color="#5B8DD6")
+            ax.bar(np.arange(256), hist, width=1.0, color="#2563EB", alpha=0.82)
             if threshold is not None:
-                ax.axvline(threshold, color="#E03131", linewidth=1.2, linestyle="--")
-                ax.text(min(threshold + 3, 205), ax.get_ylim()[1] * 0.88,
-                        f"T = {threshold}", color="#E03131", fontsize=8, fontweight="bold")
-        self.figure.tight_layout(pad=0.6)
+                ax.axvline(threshold, color="#DC2626", linewidth=1.6, linestyle="--")
+                y_max = ax.get_ylim()[1]
+                x_pos = threshold + 5 if threshold < 195 else threshold - 48
+                ax.text(
+                    x_pos, y_max * 0.86,
+                    f"T = {threshold}",
+                    color="#B91C1C", fontsize=8.5, fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.25", facecolor="#FEF2F2", edgecolor="#FCA5A5", linewidth=0.9)
+                )
+        self.figure.tight_layout(pad=0.8)
         self.draw_idle()
 
     def draw_variance(self, var_before, var_after, t_before, t_after):
-        ax = self._axes("Phương sai giữa hai lớp theo ngưỡng t (Otsu)")
-        ax.set_ylabel("Phương sai σ²", fontsize=8)
+        ax = self._axes("")
+        ax.set_title("")
+        ax.set_ylabel("σ²_B(t)", fontsize=8, fontweight="semibold", color="#334155")
+        ax.set_xlabel("Ngưỡng t", fontsize=8, fontweight="semibold", color="#334155")
+        ax.tick_params(labelsize=7.5, colors="#475569")
         if var_before is not None:
-            ax.plot(var_before, color="#7B8794", linewidth=1.1, label=f"Ảnh gốc (T = {t_before})")
-            ax.plot(var_after, color="#2F6DB5", linewidth=1.4, label=f"Sau nâng cao (T = {t_after})")
-            ax.axvline(t_before, color="#7B8794", linestyle=":", linewidth=0.9)
-            ax.axvline(t_after, color="#2F6DB5", linestyle=":", linewidth=0.9)
-            ax.legend(fontsize=7, frameon=False)
-        self.figure.tight_layout(pad=0.6)
+            ax.plot(var_before, color="#64748B", linewidth=1.3, linestyle="--",
+                    label=f"Gốc (T={t_before})")
+            ax.plot(var_after, color="#1B56B5", linewidth=1.8,
+                    label=f"Nâng cao (T={t_after})")
+            ax.axvline(t_before, color="#94A3B8", linestyle=":", linewidth=1.0)
+            ax.axvline(t_after, color="#1B56B5", linestyle=":", linewidth=1.1)
+            ax.scatter([t_before], [var_before[t_before]], color="#475569", s=22, zorder=5)
+            ax.scatter([t_after], [var_after[t_after]], color="#1B56B5", s=28, zorder=6)
+            ax.legend(fontsize=7.2, loc="lower center", frameon=True, facecolor="#F8FAFC", edgecolor="#E2E8F0")
+        self.figure.tight_layout(pad=0.35)
         self.draw_idle()
 
 
@@ -447,8 +577,8 @@ class ImageProcessingStudio(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Tính histogram và nâng cao chất lượng ảnh - Đề tài 13")
-        self.resize(1260, 800)
-        self.setMinimumSize(920, 620)
+        self.resize(1320, 840)
+        self.setMinimumSize(960, 660)
 
         icon = ASSETS_DIR / "logo.ico"
         if icon.exists():
@@ -476,89 +606,161 @@ class ImageProcessingStudio(QMainWindow):
         self.init_history_log()
 
     # ---------------- Xây dựng giao diện ----------------
+    def _make_vsep(self):
+        sep = QFrame()
+        sep.setObjectName("vSep")
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(26)
+        return sep
+
     def build_ui(self):
         central = QWidget()
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 10)
+        root.setContentsMargins(14, 10, 14, 10)
         root.setSpacing(10)
         self.setCentralWidget(central)
 
-        # 1. Thanh công cụ chính
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
+        # 1. Thanh công cụ ngang cao cấp (Card Toolbar phân 3 nhóm rõ ràng)
+        toolbar_card = QFrame()
+        toolbar_card.setObjectName("toolbarCard")
+        bar = QHBoxLayout(toolbar_card)
+        bar.setContentsMargins(12, 8, 12, 8)
+        bar.setSpacing(8)
 
+        # Nhóm 1: Nguồn ảnh
         self.btn_open = QPushButton("Chọn ảnh...")
-        self.btn_open.setObjectName("primary")
+        self.btn_open.setObjectName("btnOpen")
+        self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open.clicked.connect(self.open_dialog)
 
         self.btn_reset = QPushButton("Đặt lại")
+        self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_reset.clicked.connect(self.reset)
+
+        # Nhóm 2: Xử lý cốt lõi
+        lbl_method = QLabel("Phương pháp:")
+        lbl_method.setObjectName("toolbarLabel")
 
         self.combo_method = QComboBox()
         self.combo_method.addItems(self.METHODS)
+        self.combo_method.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_method.setCursor(Qt.CursorShape.PointingHandCursor)
 
         self.btn_apply = QPushButton("Nâng cao ảnh")
         self.btn_apply.setObjectName("primary")
+        self.btn_apply.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_apply.clicked.connect(self.apply_enhancement)
 
         self.btn_otsu = QPushButton("Phân đoạn Otsu")
-        self.btn_otsu.setObjectName("primary")
+        self.btn_otsu.setObjectName("accentTeal")
+        self.btn_otsu.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_otsu.clicked.connect(self.apply_otsu)
 
         self.chk_gray = QCheckBox("Xem ảnh xám")
+        self.chk_gray.setCursor(Qt.CursorShape.PointingHandCursor)
         self.chk_gray.toggled.connect(self.toggle_gray)
 
+        # Nhóm 3: Xuất kết quả
         self.btn_save = QPushButton("Lưu ảnh...")
+        self.btn_save.setObjectName("btnExport")
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save.clicked.connect(self.save_results)
 
         self.btn_report = QPushButton("Xuất báo cáo...")
+        self.btn_report.setObjectName("btnExport")
+        self.btn_report.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_report.clicked.connect(self.export_report)
 
-        for w in (self.btn_open, self.btn_reset):
-            bar.addWidget(w)
-        bar.addSpacing(10)
-        bar.addWidget(QLabel("Phương pháp:"))
+        bar.addWidget(self.btn_open)
+        bar.addWidget(self.btn_reset)
+        bar.addSpacing(4)
+        bar.addWidget(self._make_vsep())
+        bar.addSpacing(4)
+        bar.addWidget(lbl_method)
         bar.addWidget(self.combo_method)
         bar.addWidget(self.btn_apply)
         bar.addWidget(self.btn_otsu)
-        bar.addSpacing(10)
+        bar.addSpacing(4)
+        bar.addWidget(self._make_vsep())
+        bar.addSpacing(4)
         bar.addWidget(self.chk_gray)
         bar.addStretch()
         bar.addWidget(self.btn_save)
         bar.addWidget(self.btn_report)
-        root.addLayout(bar)
+        root.addWidget(toolbar_card)
 
         self.btn_save.setEnabled(False)
         self.btn_report.setEnabled(False)
 
-        # 2. Phân chia giao diện: Phần trên (2 ảnh) & Phần dưới (Tabs phân tích)
+        # 2. Phân chia giao diện: Phần trên (2 ảnh) & Phần dưới (KPI + Tabs phân tích)
         main_splitter = QSplitter(Qt.Orientation.Vertical)
         main_splitter.setChildrenCollapsible(False)
+        main_splitter.setHandleWidth(8)
 
         # Phần trên: So sánh Ảnh gốc vs Ảnh sau nâng cao
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
         top_splitter.setChildrenCollapsible(False)
+        top_splitter.setHandleWidth(10)
 
-        self.canvas_orig = ImageCanvas("Chưa có ảnh (nhấn 'Chọn ảnh' hoặc kéo thả ảnh vào đây)")
-        self.canvas_proc = ImageCanvas("Chưa áp dụng nâng cao chất lượng")
+        self.canvas_orig = ImageCanvas(
+            placeholder="Kéo thả ảnh vào đây để bắt đầu",
+            subtext="Hoặc nhấn nút 'Chọn ảnh...' (Hỗ trợ PNG, JPG, BMP, TIFF)",
+            accept_drop=True
+        )
+        self.canvas_proc = ImageCanvas(
+            placeholder="Chưa áp dụng nâng cao chất lượng",
+            subtext="Chọn phương pháp ở thanh công cụ rồi nhấn 'Nâng cao ảnh'",
+            accept_drop=False
+        )
         self.canvas_orig.file_dropped.connect(self.load_image)
         self.canvas_orig.double_clicked.connect(lambda: self.zoom("Ảnh gốc", self.original))
         self.canvas_proc.double_clicked.connect(lambda: self.zoom("Ảnh sau nâng cao", self.processed))
 
-        self.lbl_orig = QLabel("")
-        self.lbl_proc = QLabel("")
+        self.badge_orig = QLabel("Chưa nạp ảnh")
+        self.badge_proc = QLabel("Đang chờ xử lý")
+        self.lbl_orig = QLabel("Thông số mức xám sẽ hiển thị sau khi nạp ảnh")
+        self.lbl_proc = QLabel("Thông số so sánh sẽ hiển thị sau khi xử lý")
 
-        top_splitter.addWidget(self.create_card("Ảnh gốc", self.canvas_orig, self.lbl_orig))
-        top_splitter.addWidget(self.create_card("Ảnh sau nâng cao", self.canvas_proc, self.lbl_proc))
+        top_splitter.addWidget(self.create_card("Ảnh gốc", self.canvas_orig, self.lbl_orig, self.badge_orig))
+        top_splitter.addWidget(self.create_card("Ảnh sau nâng cao", self.canvas_proc, self.lbl_proc, self.badge_proc))
         main_splitter.addWidget(top_splitter)
 
-        # Phần dưới: Hệ thống các Tab phân tích chuyên sâu
+        # Phần dưới: Dải 4 thẻ KPI tóm tắt + Hệ thống 4 Tab phân tích
+        bottom_container = QWidget()
+        bottom_layout = QVBoxLayout(bottom_container)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(10)
+
+        # Dải 4 thẻ KPI tóm tắt chỉ số quan trọng
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(10)
+
+        self.kpi_contrast_val, self.kpi_contrast_sub, card_k1 = self.create_kpi_card(
+            "ĐỘ TƯƠNG PHẢN (ĐỘ LỆCH CHUẨN σ)", "#1B56B5"
+        )
+        self.kpi_otsu_val, self.kpi_otsu_sub, card_k2 = self.create_kpi_card(
+            "NGƯỠNG PHÂN ĐOẠN OTSU (T)", "#0F172A"
+        )
+        self.kpi_iou_val, self.kpi_iou_sub, card_k3 = self.create_kpi_card(
+            "ĐỘ TƯƠNG ĐỒNG IoU (JACCARD)", "#0F766E"
+        )
+        self.kpi_dice_val, self.kpi_dice_sub, card_k4 = self.create_kpi_card(
+            "HỆ SỐ DICE (F1) & SAI KHÁC", "#B45309"
+        )
+
+        for kc in (card_k1, card_k2, card_k3, card_k4):
+            kpi_row.addWidget(kc, 1)
+        bottom_layout.addLayout(kpi_row)
+
+        # Hệ thống các Tab phân tích chuyên sâu
         self.tabs = QTabWidget()
 
         # Tab 1: Histogram
         t1 = QWidget()
         l1 = QHBoxLayout(t1)
-        l1.setContentsMargins(8, 8, 8, 8)
+        l1.setContentsMargins(10, 10, 10, 10)
+        l1.setSpacing(12)
         self.plot_h_orig = PlotCanvas()
         self.plot_h_proc = PlotCanvas()
         l1.addWidget(self.plot_h_orig)
@@ -568,44 +770,49 @@ class ImageProcessingStudio(QMainWindow):
         # Tab 2: Phân đoạn Otsu & So sánh chi tiết
         t2 = QWidget()
         l2_main = QVBoxLayout(t2)
-        l2_main.setContentsMargins(8, 6, 8, 6)
-        l2_main.setSpacing(6)
+        l2_main.setContentsMargins(10, 8, 10, 10)
+        l2_main.setSpacing(8)
 
         # Thanh điều khiển nhỏ trong Tab Otsu
         sub_bar = QHBoxLayout()
         sub_bar.setSpacing(8)
-        sub_bar.addWidget(QLabel("Chế độ hiển thị:"))
+        lbl_view = QLabel("Chế độ hiển thị:")
+        lbl_view.setObjectName("toolbarLabel")
+        sub_bar.addWidget(lbl_view)
 
         self.combo_view = QComboBox()
         self.combo_view.addItems(self.VIEW_MODES)
+        self.combo_view.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_view.setCursor(Qt.CursorShape.PointingHandCursor)
         self.combo_view.currentTextChanged.connect(self.on_view_mode_changed)
         sub_bar.addWidget(self.combo_view)
 
-        sub_bar.addSpacing(10)
+        sub_bar.addSpacing(8)
         self.btn_load_gt = QPushButton("Nạp Ground Truth...")
+        self.btn_load_gt.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_load_gt.clicked.connect(self.load_ground_truth)
         sub_bar.addWidget(self.btn_load_gt)
 
         self.btn_clear_gt = QPushButton("Xóa GT")
         self.btn_clear_gt.setVisible(False)
+        self.btn_clear_gt.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_gt.clicked.connect(self.clear_ground_truth)
         sub_bar.addWidget(self.btn_clear_gt)
 
         sub_bar.addStretch()
-        self.lbl_otsu_summary = QLabel("Chưa phân đoạn Otsu")
-        self.lbl_otsu_summary.setStyleSheet(
-            "background: #EEF3F9; color: #243B53; padding: 4px 12px; border-radius: 6px; font-weight: 600;"
-        )
+        self.lbl_otsu_summary = QLabel("Chưa thực hiện phân đoạn Otsu")
+        self.lbl_otsu_summary.setObjectName("otsuSummaryPill")
         sub_bar.addWidget(self.lbl_otsu_summary)
         l2_main.addLayout(sub_bar)
 
         # 4 khung hiển thị kết quả phân đoạn & so sánh
         otsu_splitter = QSplitter(Qt.Orientation.Horizontal)
         otsu_splitter.setChildrenCollapsible(False)
+        otsu_splitter.setHandleWidth(8)
 
         self.canvas_mask_orig = ImageCanvas("Chưa phân đoạn")
         self.canvas_mask_proc = ImageCanvas("Chưa phân đoạn")
-        self.canvas_diff = ImageCanvas("Chưa có bản đồ khác biệt")
+        self.canvas_diff = ImageCanvas("Chưa có bản đồ sai khác")
 
         self.canvas_mask_orig.double_clicked.connect(
             lambda: self.zoom("Phân đoạn - Ảnh gốc", self.get_display_image("orig")))
@@ -620,13 +827,14 @@ class ImageProcessingStudio(QMainWindow):
 
         self.plot_var = PlotCanvas()
 
-        otsu_splitter.addWidget(self.create_card("Otsu - Ảnh gốc", self.canvas_mask_orig, self.lbl_mask_orig))
-        otsu_splitter.addWidget(self.create_card("Otsu - Sau nâng cao", self.canvas_mask_proc, self.lbl_mask_proc))
-        otsu_splitter.addWidget(self.create_card("Bản đồ sai khác phân đoạn", self.canvas_diff, self.lbl_diff))
-        otsu_splitter.addWidget(self.create_card("Đường cong phương sai σ²(t)", self.plot_var, QLabel("Ngưỡng tối ưu max σ²_B(t)")))
+        otsu_splitter.addWidget(self.create_card("Otsu - Ảnh gốc", self.canvas_mask_orig, self.lbl_mask_orig, compact=True))
+        otsu_splitter.addWidget(self.create_card("Otsu - Sau nâng cao", self.canvas_mask_proc, self.lbl_mask_proc, compact=True))
+        otsu_splitter.addWidget(self.create_card("Bản đồ sai khác phân đoạn", self.canvas_diff, self.lbl_diff, compact=True))
+        otsu_splitter.addWidget(self.create_card("Đường cong phương sai σ²(t)", self.plot_var, QLabel("Ngưỡng tối ưu max σ²_B(t)"), compact=True))
+        otsu_splitter.setSizes([280, 280, 280, 380])
 
         l2_main.addWidget(otsu_splitter, 1)
-        self.tabs.addTab(t2, "Phân đoạn Otsu & So sánh")
+        self.tabs.addTab(t2, "Phân đoạn Otsu && So sánh")
 
         # Tab 3: Bảng so sánh chỉ số chi tiết
         self.table = QTableWidget(0, 4)
@@ -639,6 +847,7 @@ class ImageProcessingStudio(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setAlternatingRowColors(True)
         self.table.setShowGrid(False)
         self.tabs.addTab(self.table, "Bảng so sánh chi tiết")
@@ -646,20 +855,23 @@ class ImageProcessingStudio(QMainWindow):
         # Tab 4: Nhật ký & Lịch sử thao tác (Ghi bền vững vào file log theo ngày)
         t4 = QWidget()
         l4 = QVBoxLayout(t4)
-        l4.setContentsMargins(8, 8, 8, 8)
-        l4.setSpacing(6)
+        l4.setContentsMargins(10, 8, 10, 10)
+        l4.setSpacing(8)
 
         log_bar = QHBoxLayout()
-        self.lbl_log_info = QLabel("📁 Đang kết nối tệp nhật ký...")
-        self.lbl_log_info.setStyleSheet("color: #52606D; font-size: 8.5pt;")
+        self.lbl_log_info = QLabel("Đang kết nối tệp nhật ký...")
+        self.lbl_log_info.setObjectName("logPathBadge")
 
         self.btn_reload_log = QPushButton("Tải lại lịch sử")
+        self.btn_reload_log.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_reload_log.clicked.connect(self.load_today_log_to_ui)
 
         self.btn_open_log_dir = QPushButton("Mở thư mục Log")
+        self.btn_open_log_dir.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_log_dir.clicked.connect(self.open_log_directory)
 
         self.btn_clear_log_view = QPushButton("Xóa khung xem")
+        self.btn_clear_log_view.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_log_view.clicked.connect(self.log_box_clear_view)
 
         log_bar.addWidget(self.lbl_log_info)
@@ -671,16 +883,17 @@ class ImageProcessingStudio(QMainWindow):
 
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
-        self.log_box.setStyleSheet("font-family: 'Consolas', 'Courier New', monospace; font-size: 9pt;")
+        self.log_box.setObjectName("logBox")
         l4.addWidget(self.log_box)
 
         self.tabs.addTab(t4, "Nhật ký xử lý (Lịch sử)")
 
-        main_splitter.addWidget(self.tabs)
-        main_splitter.setSizes([400, 350])
+        bottom_layout.addWidget(self.tabs, 1)
+        main_splitter.addWidget(bottom_container)
+        main_splitter.setSizes([380, 390])
         root.addWidget(main_splitter, 1)
 
-        self.statusBar().showMessage("Sẵn sàng")
+        self.statusBar().showMessage("Sẵn sàng — Nhấn 'Chọn ảnh...' hoặc kéo thả tệp ảnh vào khung bên trái.")
         self.refresh_table()
         self.plot_h_orig.draw_histogram(None, "Histogram ảnh gốc")
         self.plot_h_proc.draw_histogram(None, "Histogram ảnh sau nâng cao")
@@ -700,71 +913,470 @@ class ImageProcessingStudio(QMainWindow):
             a.triggered.connect(slot)
             m.addAction(a)
 
-    def create_card(self, title, widget, label=None):
-        box = QGroupBox(title)
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(8, 10, 8, 8)
-        lay.setSpacing(4)
-        lay.addWidget(widget, 1)
+    def create_card(self, title, widget, label=None, badge=None, compact=False):
+        card = QFrame()
+        card.setObjectName("cardCompact" if compact else "card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        # Header bar nổi bật bên trong card
+        header = QFrame()
+        header.setObjectName("cardHeader")
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(12 if not compact else 10, 7 if not compact else 5,
+                                 12 if not compact else 10, 7 if not compact else 5)
+        h_lay.setSpacing(8)
+
+        lbl_title = QLabel(title)
+        lbl_title.setObjectName("cardTitleCompact" if compact else "cardTitle")
+        h_lay.addWidget(lbl_title)
+        h_lay.addStretch()
+
+        if badge is not None:
+            badge.setObjectName("cardBadge")
+            h_lay.addWidget(badge)
+
+        lay.addWidget(header)
+
+        # Nội dung chính (Canvas / Plot)
+        body = QWidget()
+        b_lay = QVBoxLayout(body)
+        pad = 8 if not compact else 6
+        b_lay.setContentsMargins(pad, pad, pad, pad)
+        b_lay.setSpacing(0)
+        b_lay.addWidget(widget, 1)
+        lay.addWidget(body, 1)
+
+        # Footer hiển thị thông số đậm rõ
         if label is not None:
+            footer = QFrame()
+            footer.setObjectName("cardFooter")
+            f_lay = QHBoxLayout(footer)
+            f_lay.setContentsMargins(10, 5 if not compact else 4, 10, 5 if not compact else 4)
             label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            label.setStyleSheet("font-size: 8.5pt; color: #52606D; padding-top: 2px;")
-            lay.addWidget(label)
-        return box
+            label.setObjectName("cardFooterTextCompact" if compact else "cardFooterText")
+            f_lay.addWidget(label)
+            lay.addWidget(footer)
+
+        return card
+
+    def create_kpi_card(self, title: str, accent_color: str):
+        card = QFrame()
+        card.setObjectName("kpiCard")
+        card.setFixedHeight(76)
+        card.setStyleSheet("""
+            QFrame#kpiCard {
+                background: #FFFFFF;
+                border: 1px solid #D8E0EA;
+                border-radius: 9px;
+            }
+        """)
+        outer = QHBoxLayout(card)
+        outer.setContentsMargins(10, 8, 12, 8)
+        outer.setSpacing(10)
+
+        accent_bar = QFrame()
+        accent_bar.setFixedWidth(4)
+        accent_bar.setStyleSheet(f"background: {accent_color}; border: none; border-radius: 2px;")
+        outer.addWidget(accent_bar)
+
+        lay = QVBoxLayout()
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(1)
+
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 8pt; font-weight: 700; color: #475569; letter-spacing: 0.2px;")
+
+        lbl_val = QLabel("—")
+        lbl_val.setStyleSheet(f"font-size: 13.5pt; font-weight: 800; color: {accent_color};")
+
+        lbl_sub = QLabel("Chưa có dữ liệu")
+        lbl_sub.setStyleSheet("font-size: 8.5pt; font-weight: 500; color: #64748B;")
+
+        lay.addWidget(lbl_title)
+        lay.addWidget(lbl_val)
+        lay.addWidget(lbl_sub)
+        outer.addLayout(lay, 1)
+        return lbl_val, lbl_sub, card
+
+    def update_kpi_cards(self, s1=None, s2=None):
+        """Cập nhật đồng bộ 4 thẻ chỉ số KPI nổi bật."""
+        if s1 is None or s2 is None:
+            self.kpi_contrast_val.setText("—")
+            self.kpi_contrast_sub.setText("Chưa nạp ảnh đầu vào")
+            self.kpi_otsu_val.setText("—")
+            self.kpi_otsu_sub.setText("Chưa phân đoạn Otsu")
+            self.kpi_iou_val.setText("—")
+            self.kpi_iou_sub.setText("Chưa phân đoạn Otsu")
+            self.kpi_dice_val.setText("—")
+            self.kpi_dice_sub.setText("Chưa phân đoạn Otsu")
+            return
+
+        # 1. Độ tương phản (Độ lệch chuẩn σ)
+        std1, std2 = s1["std"], s2["std"]
+        if self.method_used and std1 > 0:
+            pct = (std2 - std1) / std1 * 100.0
+            self.kpi_contrast_val.setText(f"{std2:.2f}  ({pct:+.1f}%)")
+            self.kpi_contrast_sub.setText(f"Ảnh gốc: {std1:.2f}  •  Dải động: [{s2['min']}..{s2['max']}]")
+        else:
+            self.kpi_contrast_val.setText(f"{std1:.2f}")
+            self.kpi_contrast_sub.setText(f"Chưa nâng cao  •  Dải động: [{s1['min']}..{s1['max']}]")
+
+        # 2-4. Chỉ số Phân đoạn Otsu
+        if self.otsu:
+            o1 = self.otsu["orig"]
+            o2 = self.otsu["proc"]
+            m = self.otsu["metrics"]
+            dt = o2["t"] - o1["t"]
+
+            self.kpi_otsu_val.setText(f"T = {o2['t']}")
+            self.kpi_otsu_sub.setText(f"Ảnh gốc: T = {o1['t']}  •  Dịch ngưỡng: {dt:+d}")
+
+            self.kpi_iou_val.setText(f"{m['iou']:.2f}%")
+            self.kpi_iou_sub.setText(f"Đối tượng đồng thuận: {m['common_pixels']:,} px")
+
+            self.kpi_dice_val.setText(f"{m['dice']:.2f}%")
+            self.kpi_dice_sub.setText(f"Tỷ lệ sai khác: {m['diff_rate']:.2f}% ({m['diff_pixels']:,} px)")
+        else:
+            self.kpi_otsu_val.setText("—")
+            self.kpi_otsu_sub.setText("Nhấn 'Phân đoạn Otsu' để tính ngưỡng")
+            self.kpi_iou_val.setText("—")
+            self.kpi_iou_sub.setText("Đo độ trùng khớp trước & sau nâng cao")
+            self.kpi_dice_val.setText("—")
+            self.kpi_dice_sub.setText("Đánh giá tương đồng vùng đối tượng")
 
     def apply_style(self):
         self.setStyleSheet(f"""
-            QWidget {{ font-family: 'Segoe UI'; font-size: 9.5pt; color: #1F2933; }}
-            QMainWindow {{ background: #EAEFF5; }}
-            QMenuBar {{ background: #FFFFFF; border-bottom: 1px solid #D5DCE6; }}
-            QMenuBar::item {{ padding: 5px 12px; border-radius: 6px; }}
-            QMenuBar::item:selected {{ background: #E3ECF8; }}
-            QStatusBar {{ background: #FFFFFF; border-top: 1px solid #D5DCE6; color: #52606D; }}
+            QWidget {{
+                font-family: 'Segoe UI', 'Tahoma', sans-serif;
+                font-size: 9.5pt;
+                color: #0F172A;
+            }}
+            QMainWindow {{
+                background: #F4F6F9;
+            }}
+            QMenuBar {{
+                background: #FFFFFF;
+                border-bottom: 1px solid #DCE3EC;
+                font-weight: 600;
+                color: #1E293B;
+                padding: 2px 6px;
+            }}
+            QMenuBar::item {{
+                padding: 5px 12px;
+                border-radius: 6px;
+            }}
+            QMenuBar::item:selected {{
+                background: #EEF2F8;
+                color: #1B56B5;
+            }}
+            QStatusBar {{
+                background: #FFFFFF;
+                border-top: 1px solid #DCE3EC;
+                color: #334155;
+                font-size: 9pt;
+                font-weight: 500;
+                padding: 2px 8px;
+            }}
 
-            QGroupBox {{ background: #FFFFFF; border: 1px solid #D5DCE6; border-radius: 10px;
-                        margin-top: 12px; padding-top: 10px; font-weight: 600; }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: 14px; padding: 0 6px;
-                               color: #243B53; background: #EAEFF5; border-radius: 4px; }}
+            /* Thanh công cụ chính dạng Card */
+            QFrame#toolbarCard {{
+                background: #FFFFFF;
+                border: 1px solid #D8E0EA;
+                border-radius: 10px;
+            }}
+            QFrame#vSep {{
+                background: #E2E8F0;
+                border: none;
+            }}
+            QLabel#toolbarLabel {{
+                font-size: 9.5pt;
+                font-weight: 700;
+                color: #1E293B;
+            }}
 
-            QPushButton {{ background: #FFFFFF; border: 1px solid #C5CED9; border-radius: 8px;
-                          padding: 6px 15px; color: #243B53; }}
-            QPushButton:hover {{ background: #F0F5FB; border-color: #9FB3C8; }}
-            QPushButton:pressed {{ background: #E3ECF8; }}
-            QPushButton:disabled {{ color: #9AA5B1; background: #F2F4F7; border-color: #E1E6EC; }}
-            QPushButton#primary {{ background: #2F6DB5; color: #FFFFFF; border: 1px solid #2F6DB5;
-                                  font-weight: 600; }}
-            QPushButton#primary:hover {{ background: #265C9C; }}
-            QPushButton#primary:pressed {{ background: #1F4D84; }}
+            /* Thẻ hiển thị ảnh (Card hiện đại) */
+            QFrame#card, QFrame#cardCompact {{
+                background: #FFFFFF;
+                border: 1px solid #D8E0EA;
+                border-radius: 10px;
+            }}
+            QFrame#cardHeader {{
+                background: #FFFFFF;
+                border-bottom: 1px solid #EDF2F7;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }}
+            QLabel#cardTitle {{
+                font-size: 11.5pt;
+                font-weight: 700;
+                color: #0F172A;
+            }}
+            QLabel#cardTitleCompact {{
+                font-size: 10pt;
+                font-weight: 700;
+                color: #0F172A;
+            }}
+            QLabel#cardBadge {{
+                background: #EFF4FB;
+                color: #1E40AF;
+                border: 1px solid #D5E3F8;
+                border-radius: 6px;
+                padding: 2px 9px;
+                font-size: 8.5pt;
+                font-weight: 700;
+            }}
+            QFrame#cardFooter {{
+                background: #F8FAFC;
+                border-top: 1px solid #EDF2F7;
+                border-bottom-left-radius: 10px;
+                border-bottom-right-radius: 10px;
+            }}
+            QLabel#cardFooterText {{
+                font-size: 9.5pt;
+                font-weight: 600;
+                color: #1E293B;
+            }}
+            QLabel#cardFooterTextCompact {{
+                font-size: 8.5pt;
+                font-weight: 600;
+                color: #334155;
+            }}
 
-            QComboBox {{ background: #FFFFFF; border: 1px solid #C5CED9; border-radius: 8px;
-                        padding: 5px 12px; min-width: 140px; }}
-            QComboBox:hover {{ border-color: #9FB3C8; }}
-            QComboBox::drop-down {{ border: none; width: 22px; }}
-            QComboBox::down-arrow {{ image: url({ARROW_PATH}); width: 14px; height: 14px; }}
-            QComboBox QAbstractItemView {{ border: 1px solid #C5CED9; border-radius: 6px;
-                                          selection-background-color: #E3ECF8;
-                                          selection-color: #1F2933; background: white; }}
-            QCheckBox {{ spacing: 6px; }}
+            /* Hệ thống nút bấm phân cấp rõ ràng */
+            QPushButton {{
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 7px;
+                padding: 7px 14px;
+                color: #1E293B;
+                font-size: 9.5pt;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                background: #F8FAFC;
+                border-color: #94A3B8;
+                color: #0F172A;
+            }}
+            QPushButton:pressed {{
+                background: #EDF2F7;
+            }}
+            QPushButton:disabled {{
+                color: #94A3B8;
+                background: #F8FAFC;
+                border-color: #E2E8F0;
+            }}
 
-            QTabWidget::pane {{ background: #FFFFFF; border: 1px solid #D5DCE6; border-radius: 10px;
-                               top: -1px; }}
-            QTabBar::tab {{ background: transparent; padding: 7px 18px; margin-right: 4px;
-                           border-top-left-radius: 8px; border-top-right-radius: 8px;
-                           color: #52606D; }}
-            QTabBar::tab:hover {{ background: #DDE6F0; }}
-            QTabBar::tab:selected {{ background: #FFFFFF; color: #2F6DB5; font-weight: 600;
-                                    border: 1px solid #D5DCE6; border-bottom-color: #FFFFFF; }}
+            /* Nút Chọn ảnh - nổi bật tinh tế */
+            QPushButton#btnOpen {{
+                background: #EFF6FF;
+                color: #1B56B5;
+                border: 1.5px solid #93C5FD;
+                font-size: 10pt;
+                font-weight: 700;
+                padding: 7px 16px;
+            }}
+            QPushButton#btnOpen:hover {{
+                background: #DBEAFE;
+                border-color: #60A5FA;
+                color: #144493;
+            }}
+            QPushButton#btnOpen:pressed {{
+                background: #BFDBFE;
+            }}
 
-            QTableWidget {{ background: #FFFFFF; border: none; gridline-color: #E4E9F0;
-                           alternate-background-color: #F8FAFC; }}
-            QHeaderView::section {{ background: #EEF3F9; border: none; border-bottom: 1px solid #D5DCE6;
-                                   padding: 7px; font-weight: 600; color: #243B53; }}
-            QPlainTextEdit {{ background: #FFFFFF; border: none; border-radius: 10px; padding: 6px; }}
+            /* Nút hành động chính: Nâng cao ảnh */
+            QPushButton#primary {{
+                background: #1B56B5;
+                color: #FFFFFF;
+                border: 1px solid #164899;
+                font-size: 10pt;
+                font-weight: 700;
+                padding: 7px 18px;
+            }}
+            QPushButton#primary:hover {{
+                background: #144493;
+            }}
+            QPushButton#primary:pressed {{
+                background: #0F3573;
+            }}
 
-            QSplitter::handle {{ background: transparent; }}
-            QScrollBar:vertical {{ background: transparent; width: 10px; }}
-            QScrollBar::handle:vertical {{ background: #C5CED9; border-radius: 5px; min-height: 24px; }}
-            QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
+            /* Nút hành động chính thứ 2: Phân đoạn Otsu */
+            QPushButton#accentTeal {{
+                background: #0F766E;
+                color: #FFFFFF;
+                border: 1px solid #0C5F59;
+                font-size: 10pt;
+                font-weight: 700;
+                padding: 7px 18px;
+            }}
+            QPushButton#accentTeal:hover {{
+                background: #0D625C;
+            }}
+            QPushButton#accentTeal:pressed {{
+                background: #0A4D48;
+            }}
+
+            /* Nút Xuất kết quả */
+            QPushButton#btnExport {{
+                background: #F8FAFC;
+                border: 1px solid #CBD5E1;
+                color: #0F172A;
+                font-weight: 600;
+            }}
+            QPushButton#btnExport:hover {{
+                background: #EEF2F8;
+                border-color: #94A3B8;
+            }}
+
+            /* ComboBox & CheckBox */
+            QComboBox {{
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 7px;
+                padding: 6px 12px;
+                min-width: 175px;
+                font-size: 9.5pt;
+                font-weight: 600;
+                color: #0F172A;
+            }}
+            QComboBox:hover {{
+                border-color: #64748B;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 24px;
+            }}
+            QComboBox::down-arrow {{
+                image: url({ARROW_PATH});
+                width: 14px;
+                height: 14px;
+            }}
+            QComboBox QAbstractItemView {{
+                border: 1px solid #CBD5E1;
+                border-radius: 6px;
+                selection-background-color: #EFF6FF;
+                selection-color: #1B56B5;
+                background: #FFFFFF;
+                padding: 4px;
+                font-weight: 600;
+            }}
+            QCheckBox {{
+                spacing: 7px;
+                font-size: 9.5pt;
+                font-weight: 600;
+                color: #1E293B;
+            }}
+
+            /* Nhãn tóm tắt Otsu & Log */
+            QLabel#otsuSummaryPill {{
+                background: #EFF6FF;
+                color: #0F172A;
+                border: 1px solid #BFDBFE;
+                padding: 5px 14px;
+                border-radius: 7px;
+                font-size: 9.5pt;
+                font-weight: 700;
+            }}
+            QLabel#logPathBadge {{
+                background: #F1F5F9;
+                color: #1E293B;
+                border: 1px solid #DCE3EC;
+                padding: 4px 10px;
+                border-radius: 6px;
+                font-size: 9pt;
+                font-weight: 600;
+            }}
+
+            /* Hệ thống Tab */
+            QTabWidget::pane {{
+                background: #FFFFFF;
+                border: 1px solid #D8E0EA;
+                border-radius: 10px;
+                border-top-left-radius: 0px;
+                top: -1px;
+            }}
+            QTabBar::tab {{
+                background: #E9EEF5;
+                color: #475569;
+                padding: 8px 20px;
+                margin-right: 4px;
+                border: 1px solid transparent;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-size: 10pt;
+                font-weight: 600;
+            }}
+            QTabBar::tab:hover {{
+                background: #DFE7F2;
+                color: #0F172A;
+            }}
+            QTabBar::tab:selected {{
+                background: #FFFFFF;
+                color: #1B56B5;
+                font-weight: 700;
+                border: 1px solid #D8E0EA;
+                border-top: 3px solid #1B56B5;
+                border-bottom-color: #FFFFFF;
+            }}
+
+            /* Bảng so sánh chi tiết */
+            QTableWidget {{
+                background: #FFFFFF;
+                border: none;
+                gridline-color: #E2E8F0;
+                alternate-background-color: #F8FAFC;
+                selection-background-color: #EFF6FF;
+                selection-color: #0F172A;
+                font-size: 9.5pt;
+            }}
+            QTableWidget::item {{
+                padding: 6px 10px;
+                border-bottom: 1px solid #F1F5F9;
+            }}
+            QHeaderView::section {{
+                background: #F1F5F9;
+                border: none;
+                border-bottom: 2px solid #CBD5E1;
+                padding: 9px 10px;
+                font-size: 10pt;
+                font-weight: 700;
+                color: #0F172A;
+            }}
+
+            /* Nhật ký xử lý */
+            QPlainTextEdit#logBox {{
+                background: #FAFBFD;
+                border: 1px solid #DCE3EC;
+                border-radius: 8px;
+                padding: 8px;
+                font-family: 'Consolas', 'Courier New', monospace;
+                font-size: 9.5pt;
+                color: #1E293B;
+            }}
+
+            /* Splitter & Scrollbar */
+            QSplitter::handle {{
+                background: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 9px;
+                margin: 2px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #CBD5E1;
+                border-radius: 4px;
+                min-height: 28px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: #94A3B8;
+            }}
+            QScrollBar::add-line, QScrollBar::sub-line {{
+                height: 0;
+                width: 0;
+            }}
         """)
 
     # ---------------- Quản lý tệp nhật ký & Lịch sử thao tác ----------------
@@ -799,7 +1411,7 @@ class ImageProcessingStudio(QMainWindow):
             rel_name = log_file.relative_to(BASE_DIR).as_posix()
         except Exception:
             rel_name = log_file.name
-        self.lbl_log_info.setText(f"📁 Tệp nhật ký hôm nay: {rel_name}")
+        self.lbl_log_info.setText(f"Tệp nhật ký hôm nay: {rel_name}")
 
         # Tải lại các thao tác đã lưu trước đó trong ngày (nếu có)
         if log_file.exists():
@@ -875,10 +1487,13 @@ class ImageProcessingStudio(QMainWindow):
         self.canvas_orig.set_image(img, self.chk_gray.isChecked())
         self.canvas_proc.set_image(self.processed, self.chk_gray.isChecked())
         h, w = img.shape[:2]
+        channels = "RGB (3 kênh)" if img.ndim == 3 else "Ảnh xám (1 kênh)"
+        self.badge_orig.setText(f"{w} × {h} px  •  {channels}")
+        self.badge_proc.setText("Chưa áp dụng nâng cao")
         self.btn_save.setEnabled(True)
         self.btn_report.setEnabled(True)
         self.refresh_all()
-        self.statusBar().showMessage(f"Đã mở: {Path(path).name}  ({w} x {h} px)")
+        self.statusBar().showMessage(f"Đã mở: {Path(path).name}  ({w} × {h} px)")
         self.log(f"Mở ảnh thành công: {Path(path).name} ({w} x {h} px).")
 
     def toggle_gray(self, checked):
@@ -1038,6 +1653,7 @@ class ImageProcessingStudio(QMainWindow):
     # ---------------- Cập nhật biểu đồ & Bảng so sánh ----------------
     def refresh_all(self):
         if self.original is None:
+            self.update_kpi_cards(None, None)
             return
         g1, g2 = to_gray(self.original), to_gray(self.processed)
         t1 = self.otsu["orig"]["t"] if self.otsu else None
@@ -1049,13 +1665,16 @@ class ImageProcessingStudio(QMainWindow):
         s1 = calculate_image_stats(g1)
         s2 = calculate_image_stats(g2)
 
+        self.badge_proc.setText(self.method_used if self.method_used else "Chưa áp dụng nâng cao")
+
         self.lbl_orig.setText(
-            f"Mức xám [{s1['min']}..{s1['max']}]  |  Trung bình {s1['mean']:.1f}  |  Độ lệch chuẩn {s1['std']:.1f}"
+            f"Mức xám: [{s1['min']}..{s1['max']}]   |   Trung bình: {s1['mean']:.1f}   |   Độ lệch chuẩn σ: {s1['std']:.1f}"
         )
         self.lbl_proc.setText(
-            f"Mức xám [{s2['min']}..{s2['max']}]  |  Trung bình {s2['mean']:.1f}  |  Độ lệch chuẩn {s2['std']:.1f}"
-            + (f"  |  {self.method_used}" if self.method_used else "")
+            f"Mức xám: [{s2['min']}..{s2['max']}]   |   Trung bình: {s2['mean']:.1f}   |   Độ lệch chuẩn σ: {s2['std']:.1f}"
+            + (f"   |   {self.method_used}" if self.method_used else "")
         )
+        self.update_kpi_cards(s1, s2)
         self.refresh_table(s1, s2)
 
     def refresh_table(self, s1=None, s2=None):
@@ -1127,14 +1746,42 @@ class ImageProcessingStudio(QMainWindow):
             for lab in default_labels:
                 data_rows.append((lab, "-", "-", "-"))
 
+        key_metrics = {
+            "Độ lệch chuẩn (Tương phản)",
+            "Ngưỡng phân đoạn Otsu (T)",
+            "Chỉ số tương đồng IoU (Jaccard)",
+            "Chỉ số tương đồng Dice (F1)",
+            "IoU so với Ground Truth",
+            "Dice so với Ground Truth",
+        }
+
         self.table.setRowCount(len(data_rows))
         for r, row in enumerate(data_rows):
+            self.table.setRowHeight(r, 32)
+            metric_name = row[0]
+            is_key = metric_name in key_metrics
             for c, val in enumerate(row):
                 item = QTableWidgetItem(val)
                 if c == 0:
-                    item.setFont(QFont("Segoe UI", 9, QFont.Weight.Medium))
+                    weight = QFont.Weight.Bold if is_key else QFont.Weight.DemiBold
+                    item.setFont(QFont("Segoe UI", 9.5, weight))
+                    item.setForeground(QColor("#0F172A"))
+                elif c in (1, 2):
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    weight = QFont.Weight.Bold if (is_key and c == 2) else QFont.Weight.Medium
+                    item.setFont(QFont("Segoe UI", 9.5, weight))
+                    item.setForeground(QColor("#1B56B5" if (is_key and c == 2 and val != "-") else "#1E293B"))
                 else:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold if is_key else QFont.Weight.DemiBold))
+                    if any(k in val for k in ("Tăng", "Mở rộng", "Cải thiện")):
+                        item.setForeground(QColor("#0F766E"))
+                    elif "IoU" in metric_name or "Dice" in metric_name:
+                        item.setForeground(QColor("#1B56B5"))
+                    elif "Giảm" in val or val.startswith("-"):
+                        item.setForeground(QColor("#B45309"))
+                    else:
+                        item.setForeground(QColor("#334155"))
                 self.table.setItem(r, c, item)
 
     def zoom(self, title, image):

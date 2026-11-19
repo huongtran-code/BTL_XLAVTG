@@ -1,0 +1,6 @@
+[2026-11-13 22:10:19] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-13 22:10:43] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-13 22:10:44] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-13 22:10:58] Áp dụng Cân bằng histogram thành công trong 298.6 ms.
+[2026-11-13 22:11:06] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-13 22:14:01] Đóng ứng dụng và kết thúc phiên làm việc.

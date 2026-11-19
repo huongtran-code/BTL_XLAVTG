@@ -1,0 +1,27 @@
+[2026-11-19 09:37:10] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-19 12:37:28] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-19 13:01:12] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-19 13:01:15] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-19 13:01:16] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-19 13:01:18] Áp dụng Cân bằng histogram thành công trong 444.7 ms.
+[2026-11-19 13:01:20] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-19 13:03:56] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-19 13:03:58] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-19 13:03:59] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-19 13:04:01] Áp dụng Cân bằng histogram thành công trong 327.3 ms.
+[2026-11-19 13:04:03] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-19 13:06:38] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-19 13:06:39] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-19 13:06:41] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-19 13:06:43] Áp dụng Cân bằng histogram thành công trong 445.9 ms.
+[2026-11-19 13:06:45] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-19 13:08:31] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-19 13:08:58] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-19 13:09:00] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-19 13:09:15] Áp dụng Cân bằng histogram thành công trong 440.1 ms.
+[2026-11-19 13:09:30] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-19 13:09:57] Thay đổi chế độ xem phân đoạn Otsu: Tách riêng đối tượng (Cutout).
+[2026-11-19 13:10:00] Thay đổi chế độ xem phân đoạn Otsu: Phủ màu đối tượng (Color Overlay).
+[2026-11-19 13:10:06] Đã nạp Ground Truth: hehehe.jpg.
+[2026-11-19 13:10:13] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-19 13:10:43] Đóng ứng dụng và kết thúc phiên làm việc.
