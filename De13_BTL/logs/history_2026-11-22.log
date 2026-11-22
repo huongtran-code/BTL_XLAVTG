@@ -1,0 +1,89 @@
+[2026-11-22 13:37:22] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 13:37:25] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:37:28] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 13:37:30] Áp dụng Kéo giãn tương phản [35..215 → 0..255] thành công trong 65.8 ms.
+[2026-11-22 13:37:32] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=150 | IoU=94.64%, Dice=97.24%, Sai khác=3.30%.
+[2026-11-22 13:37:37] Đã tạo thành công bộ 100 ảnh mẫu đa dạng tại C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\dataset_100.
+[2026-11-22 13:37:45] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 8.45s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-22 13:38:15] Thực nghiệm hàng loạt 100 ảnh (Kéo giãn tương phản) trong 6.94s: Tốt hơn=69 (69.0%), Xấu đi=9 (9.0%), Tương đương=22.
+[2026-11-22 13:40:41] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 13:40:43] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:40:45] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 13:40:48] Áp dụng Kéo giãn tương phản [35..215 → 0..255] thành công trong 64.9 ms.
+[2026-11-22 13:40:51] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=150 | IoU=94.64%, Dice=97.24%, Sai khác=3.30%.
+[2026-11-22 13:41:00] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 7.46s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-22 13:50:46] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 13:51:03] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:51:04] Mở ảnh thành công: 054_can_bang_tot_04.png (480 x 320 px).
+[2026-11-22 13:51:10] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-22 13:51:34] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 13:51:54] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:51:56] Mở ảnh thành công: hehehe.jpg (1958 x 1080 px).
+[2026-11-22 13:52:08] Áp dụng Kéo giãn tương phản [0..252 → 0..255] thành công trong 50.7 ms.
+[2026-11-22 13:52:48] Áp dụng Kéo giãn tương phản [0..176 → 131..132] thành công trong 63.3 ms.
+[2026-11-22 13:53:12] Đặt lại ảnh về trạng thái ban đầu.
+[2026-11-22 13:53:57] Chọn thư mục thực nghiệm hàng loạt: C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\dataset_100 (100 ảnh).
+[2026-11-22 13:54:26] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 6.18s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-22 13:54:37] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:54:37] Mở ảnh thành công: 001_thieu_sang_01.png (480 x 320 px).
+[2026-11-22 13:54:38] Áp dụng Cân bằng histogram thành công trong 14.1 ms.
+[2026-11-22 13:54:39] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:54:40] Mở ảnh thành công: 002_thieu_sang_02.png (480 x 320 px).
+[2026-11-22 13:54:41] Áp dụng Cân bằng histogram thành công trong 9.1 ms.
+[2026-11-22 13:54:43] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:54:43] Mở ảnh thành công: 002_thieu_sang_02.png (480 x 320 px).
+[2026-11-22 13:54:44] Áp dụng Cân bằng histogram thành công trong 9.3 ms.
+[2026-11-22 13:54:52] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:54:53] Mở ảnh thành công: 005_thieu_sang_05.png (480 x 320 px).
+[2026-11-22 13:54:54] Áp dụng Cân bằng histogram thành công trong 6.9 ms.
+[2026-11-22 13:54:55] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:54:56] Mở ảnh thành công: 005_thieu_sang_05.png (480 x 320 px).
+[2026-11-22 13:54:57] Áp dụng Cân bằng histogram thành công trong 8.0 ms.
+[2026-11-22 13:55:02] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:55:03] Mở ảnh thành công: 015_mo_suong_01.png (480 x 320 px).
+[2026-11-22 13:55:04] Áp dụng Cân bằng histogram thành công trong 11.1 ms.
+[2026-11-22 13:55:09] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:55:10] Mở ảnh thành công: 061_chay_sang_01.png (480 x 320 px).
+[2026-11-22 13:55:11] Áp dụng Cân bằng histogram thành công trong 8.9 ms.
+[2026-11-22 13:56:38] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 13:56:42] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:56:44] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 13:56:46] Áp dụng Cân bằng histogram thành công trong 205.9 ms.
+[2026-11-22 13:56:49] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-22 13:56:53] Đã xóa dữ liệu Ground Truth khỏi phiên làm việc.
+[2026-11-22 13:56:55] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 13:57:01] Áp dụng Cân bằng histogram thành công trong 124.1 ms.
+[2026-11-22 13:57:14] Áp dụng Kéo giãn tương phản [0..255 → 0..255] thành công trong 50.9 ms.
+[2026-11-22 13:57:30] Áp dụng Kéo giãn tương phản [209..255 → 201..255] thành công trong 45.0 ms.
+[2026-11-22 13:57:46] Áp dụng Kéo giãn tương phản [254..255 → 254..255] thành công trong 53.2 ms.
+[2026-11-22 13:58:07] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=148 | IoU=99.87%, Dice=99.94%, Sai khác=0.07%.
+[2026-11-22 13:58:15] Áp dụng Kéo giãn tương phản [0..255 → 0..255] thành công trong 43.5 ms.
+[2026-11-22 13:58:19] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=148 | IoU=99.87%, Dice=99.94%, Sai khác=0.07%.
+[2026-11-22 13:58:29] Thay đổi chế độ xem phân đoạn Otsu: Phủ màu đối tượng (Color Overlay).
+[2026-11-22 13:58:33] Thay đổi chế độ xem phân đoạn Otsu: Tách riêng đối tượng (Cutout).
+[2026-11-22 13:58:36] Thay đổi chế độ xem phân đoạn Otsu: Mặt nạ nhị phân (Binary Mask).
+[2026-11-22 13:58:46] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=148 | IoU=99.87%, Dice=99.94%, Sai khác=0.07%.
+[2026-11-22 13:58:54] Áp dụng Kéo giãn tương phản [175..255 → 197..255] thành công trong 51.4 ms.
+[2026-11-22 13:58:59] Phân đoạn Otsu: Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=174 | IoU=99.11%, Dice=99.55%, Sai khác=0.52%.
+[2026-11-22 14:03:16] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 14:03:16] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 14:03:17] Áp dụng Cân bằng histogram thành công trong 49.1 ms.
+[2026-11-22 14:03:17] Áp dụng Kéo giãn tương phản [35..215 → 0..255] thành công trong 33.0 ms.
+[2026-11-22 14:03:17] Phân đoạn Otsu (340.1 ms): Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=150 | IoU=94.64%, Dice=97.24%, Sai khác=3.30%.
+[2026-11-22 14:03:20] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 1.66s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-22 14:04:32] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-22 14:04:38] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 14:04:50] Đã tạo thành công bộ 100 ảnh mẫu đa dạng tại C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\dataset_100.
+[2026-11-22 14:09:09] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-22 14:09:34] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 14:09:35] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-22 14:09:35] Áp dụng Cân bằng histogram thành công trong 49.0 ms.
+[2026-11-22 14:09:35] Phân đoạn Otsu (349.7 ms): Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=125 | IoU=79.57%, Dice=88.63%, Sai khác=11.91%.
+[2026-11-22 14:14:35] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 14:23:22] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-22 15:13:59] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 15:14:02] Thực nghiệm hàng loạt 100 ảnh (Kéo giãn tương phản [40..200 → 0..255]) trong 2.74s: Tốt hơn=43 (43.0%), Xấu đi=52 (52.0%), Tương đương=5.
+[2026-11-22 15:14:02] Mở ảnh thành công: 001_thieu_sang_01.png (480 x 320 px).
+[2026-11-22 15:14:02] Áp dụng Kéo giãn tương phản [40..200 → 0..255] thành công trong 3.4 ms.
+[2026-11-22 15:15:34] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-22 15:16:32] Đóng ứng dụng và kết thúc phiên làm việc.
