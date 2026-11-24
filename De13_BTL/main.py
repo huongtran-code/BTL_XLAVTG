@@ -1,6 +1,7 @@
 import sys
 import os
 import csv
+import importlib
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -19,19 +20,109 @@ from PySide6.QtWidgets import (
     QStatusBar, QSizePolicy, QButtonGroup, QStackedWidget, QTabWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QSplitter, QDialog,
     QScrollArea, QAbstractItemView, QGroupBox, QCheckBox, QPlainTextEdit,
-    QSlider, QSpinBox, QProgressBar
+    QSlider, QSpinBox, QDoubleSpinBox, QProgressBar, QStyledItemDelegate, QStyle, QMenu
 )
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 import matplotlib
 from matplotlib.figure import Figure
+try:
+    from PIL import Image as PILImage, ImageOps as PILImageOps
+except Exception:
+    PILImage = None
+    PILImageOps = None
+try:
+    _pillow_heif = importlib.import_module("pillow_heif")
+    _pillow_heif.register_heif_opener()
+except Exception:
+    pass
 
-# Cấu hình đường dẫn
+# Cấu hình đường dẫn & định dạng ảnh hỗ trợ toàn hệ thống
 BASE_DIR = Path(__file__).resolve().parent
 ASSETS_DIR = BASE_DIR / "assets"
 LOGS_DIR = BASE_DIR / "logs"
 DATASET_100_DIR = BASE_DIR / "dataset_100"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 ARROW_PATH = (ASSETS_DIR / "arrow_down.png").as_posix()
+
+SUPPORTED_IMAGE_EXTS = {
+    ".png", ".jpg", ".jpeg", ".jpe", ".jfif",
+    ".bmp", ".dib",
+    ".tif", ".tiff",
+    ".webp", ".avif", ".heic", ".heif",
+    ".jp2", ".j2k", ".jpf", ".jpx",
+    ".gif", ".ico", ".icns",
+    ".tga", ".pcx", ".ppm", ".pgm", ".pbm", ".pnm", ".pxm",
+    ".sgi", ".rgb", ".rgba", ".dds", ".qoi", ".psd", ".hdr", ".pic", ".sr", ".ras", ".xbm", ".xpm",
+}
+
+IMAGE_FILE_FILTER = (
+    "Tất cả tệp ảnh ("
+    "*.png *.jpg *.jpeg *.jpe *.jfif *.webp *.bmp *.dib *.tif *.tiff "
+    "*.gif *.ico *.jp2 *.j2k *.avif *.heic *.heif *.tga *.ppm *.pgm *.pbm *.pnm *.pcx *.dds *.qoi *.psd"
+    ");;Tất cả tệp (*.*)"
+)
+
+
+def read_image_universal(path, grayscale: bool = False):
+    """
+    Đọc đa định dạng ảnh (hỗ trợ đường dẫn tiếng Việt Unicode):
+    1. Ưu tiên OpenCV (cv2.imdecode) cho tốc độ cao với PNG/JPG/JFIF/WEBP/BMP/TIFF/JP2/PNM...
+    2. Fallback tự động sang Pillow (GIF/ICO/TGA/PCX/DDS/PSD/QOI/AVIF/HEIC/CMYK/16-bit...).
+    3. Fallback cuối sang Qt QImage nếu còn định dạng đặc biệt khác.
+    """
+    fpath = str(path)
+    # 1. OpenCV nhanh (hỗ trợ tốt đa số định dạng phổ thông)
+    try:
+        raw = np.fromfile(fpath, dtype=np.uint8)
+        if raw.size > 0:
+            flag = cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR
+            img = cv2.imdecode(raw, flag)
+            if img is not None and img.size > 0:
+                return img
+    except Exception:
+        pass
+
+    # 2. Pillow fallback (xử lý GIF, ICO, TGA, PCX, DDS, QOI, PSD, AVIF, HEIC, CMYK...)
+    if PILImage is not None:
+        try:
+            with PILImage.open(fpath) as pil_im:
+                if getattr(pil_im, "is_animated", False):
+                    pil_im.seek(0)
+                pil_im = PILImageOps.exif_transpose(pil_im)
+                if grayscale:
+                    arr = np.asarray(pil_im.convert("L"), dtype=np.uint8)
+                    return arr.copy()
+                # Xử lý ảnh có nền trong suốt RGBA trên nền trắng/RGB sạch
+                if pil_im.mode in ("RGBA", "LA") or (pil_im.mode == "P" and "transparency" in pil_im.info):
+                    rgba = pil_im.convert("RGBA")
+                    bg = PILImage.new("RGBA", rgba.size, (255, 255, 255, 255))
+                    rgb = PILImage.alpha_composite(bg, rgba).convert("RGB")
+                else:
+                    rgb = pil_im.convert("RGB")
+                arr = np.asarray(rgb, dtype=np.uint8)
+                return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+        except Exception:
+            pass
+
+    # 3. Qt QImage fallback
+    try:
+        qim = QImage(fpath)
+        if not qim.isNull():
+            qim = qim.convertToFormat(
+                QImage.Format.Format_Grayscale8 if grayscale else QImage.Format.Format_RGB888
+            )
+            w, h = qim.width(), qim.height()
+            bpl = qim.bytesPerLine()
+            ptr = qim.constBits()
+            if grayscale:
+                arr = np.frombuffer(ptr, dtype=np.uint8, count=h * bpl).reshape((h, bpl))[:, :w]
+                return arr.copy()
+            arr = np.frombuffer(ptr, dtype=np.uint8, count=h * bpl).reshape((h, bpl))[:, :w * 3].reshape((h, w, 3))
+            return cv2.cvtColor(arr.copy(), cv2.COLOR_RGB2BGR)
+    except Exception:
+        pass
+
+    return None
 
 
 # ============================================================
@@ -89,6 +180,123 @@ def histogram_equalization(gray_image: np.ndarray, hist: np.ndarray = None) -> n
     return np.clip(lut, 0, 255).astype(np.uint8)[gray_image]
 
 
+def gamma_correction(gray_image: np.ndarray, gamma: float = 0.7) -> np.ndarray:
+    """
+    Biến đổi hàm mũ Gamma (Power-Law Transformation) dùng bảng tra 256 mức xám (LUT):
+    s = round(255 * (r / 255)^gamma)
+    - gamma < 1.0: tăng sáng vùng tối (khắc phục ảnh thiếu sáng, ngược sáng).
+    - gamma > 1.0: làm đậm / giảm chói vùng sáng (khắc phục ảnh lóa sáng).
+    """
+    g = float(max(0.05, gamma))
+    levels = np.arange(256, dtype=np.float32) / 255.0
+    lut = np.clip(np.round((levels ** g) * 255.0), 0.0, 255.0).astype(np.uint8)
+    return lut[gray_image]
+
+
+def clahe_enhance(gray_image: np.ndarray,
+                  clip_limit: float = 2.0,
+                  tile_grid: int = 8) -> np.ndarray:
+    """
+    Cân bằng histogram thích nghi có giới hạn tương phản (CLAHE) tự cài đặt bằng NumPy:
+    1. Chia ảnh thành lưới tile_grid x tile_grid ô cục bộ.
+    2. Tính histogram từng ô, cắt đỉnh vượt ngưỡng clip_limit và phân phối lại phần dư
+       đều cho 256 mức xám (chặn khuếch đại nhiễu trên vùng nền phẳng).
+    3. Xây dựng bảng ánh xạ CDF cục bộ cho mỗi ô và nội suy song tuyến tính (Bilinear)
+       giữa 4 ô lân cận để xóa hoàn toàn vết ghép biên giữa các ô.
+    """
+    h, w = gray_image.shape[:2]
+    grid = int(max(2, min(16, tile_grid)))
+    if h < grid * 2 or w < grid * 2:
+        grid = max(2, min(h // 2, w // 2, grid))
+        if grid < 2:
+            return histogram_equalization(gray_image)
+
+    y_edges = np.linspace(0, h, grid + 1, dtype=np.int32)
+    x_edges = np.linspace(0, w, grid + 1, dtype=np.int32)
+    luts = np.zeros((grid, grid, 256), dtype=np.uint8)
+
+    clip_val = float(max(1.0, clip_limit))
+    for iy in range(grid):
+        y0, y1 = int(y_edges[iy]), int(y_edges[iy + 1])
+        for ix in range(grid):
+            x0, x1 = int(x_edges[ix]), int(x_edges[ix + 1])
+            tile = gray_image[y0:y1, x0:x1]
+            n_pix = tile.size
+            if n_pix == 0:
+                luts[iy, ix] = np.arange(256, dtype=np.uint8)
+                continue
+            hist = np.bincount(tile.ravel(), minlength=256)[:256].astype(np.int64)
+            limit = max(1, int(round(clip_val * (n_pix / 256.0))))
+            over = hist > limit
+            if np.any(over):
+                excess = int(np.sum(hist[over] - limit))
+                hist[over] = limit
+                add_each, rem = divmod(excess, 256)
+                hist += add_each
+                if rem > 0:
+                    step = max(1, 256 // rem)
+                    idx = np.arange(0, 256, step)[:rem]
+                    hist[idx] += 1
+            cdf = hist.cumsum()
+            cdf_total = float(cdf[-1])
+            if cdf_total > 0:
+                luts[iy, ix] = np.clip(np.round(cdf * 255.0 / cdf_total), 0, 255).astype(np.uint8)
+            else:
+                luts[iy, ix] = np.arange(256, dtype=np.uint8)
+
+    # Tọa độ tâm các ô và nội suy song tuyến tính theo từng khối (1D LUT cực nhanh, 100% NumPy)
+    cy = 0.5 * (y_edges[:-1] + y_edges[1:]) - 0.5
+    cx = 0.5 * (x_edges[:-1] + x_edges[1:]) - 0.5
+
+    yy = np.arange(h, dtype=np.float32)
+    xx = np.arange(w, dtype=np.float32)
+
+    iy1 = np.clip(np.searchsorted(cy, yy), 0, grid - 1)
+    iy0 = np.clip(iy1 - 1, 0, grid - 1)
+    denom_y = np.maximum(cy[iy1] - cy[iy0], 1e-6)
+    wy = np.where(iy1 == iy0, 0.0, np.clip((yy - cy[iy0]) / denom_y, 0.0, 1.0)).astype(np.float32)
+
+    ix1 = np.clip(np.searchsorted(cx, xx), 0, grid - 1)
+    ix0 = np.clip(ix1 - 1, 0, grid - 1)
+    denom_x = np.maximum(cx[ix1] - cx[ix0], 1e-6)
+    wx = np.where(ix1 == ix0, 0.0, np.clip((xx - cx[ix0]) / denom_x, 0.0, 1.0)).astype(np.float32)
+
+    # Tìm các đoạn hàng/cột có cùng cặp (iy0, iy1) và (ix0, ix1) -> tra bảng 1D LUT cực nhanh
+    y_breaks = np.flatnonzero(np.diff(iy0) | np.diff(iy1)) + 1
+    y_spans = np.split(np.arange(h), y_breaks)
+    x_breaks = np.flatnonzero(np.diff(ix0) | np.diff(ix1)) + 1
+    x_spans = np.split(np.arange(w), x_breaks)
+
+    out = np.empty((h, w), dtype=np.uint8)
+    for ys in y_spans:
+        r0, r1 = int(ys[0]), int(ys[-1]) + 1
+        ty0, ty1 = int(iy0[r0]), int(iy1[r0])
+        wy_b = wy[r0:r1, None]
+        one_my = 1.0 - wy_b
+        for xs in x_spans:
+            c0, c1 = int(xs[0]), int(xs[-1]) + 1
+            tx0, tx1 = int(ix0[c0]), int(ix1[c0])
+            patch = gray_image[r0:r1, c0:c1]
+            if ty0 == ty1 and tx0 == tx1:
+                out[r0:r1, c0:c1] = luts[ty0, tx0][patch]
+            elif ty0 == ty1:
+                wx_b = wx[None, c0:c1]
+                v0 = luts[ty0, tx0][patch]
+                v1 = luts[ty0, tx1][patch]
+                out[r0:r1, c0:c1] = np.clip(np.round(v0 * (1.0 - wx_b) + v1 * wx_b), 0, 255).astype(np.uint8)
+            elif tx0 == tx1:
+                v0 = luts[ty0, tx0][patch]
+                v1 = luts[ty1, tx0][patch]
+                out[r0:r1, c0:c1] = np.clip(np.round(v0 * one_my + v1 * wy_b), 0, 255).astype(np.uint8)
+            else:
+                wx_b = wx[None, c0:c1]
+                one_mx = 1.0 - wx_b
+                top = luts[ty0, tx0][patch] * one_mx + luts[ty0, tx1][patch] * wx_b
+                bot = luts[ty1, tx0][patch] * one_mx + luts[ty1, tx1][patch] * wx_b
+                out[r0:r1, c0:c1] = np.clip(np.round(top * one_my + bot * wy_b), 0, 255).astype(np.uint8)
+    return out
+
+
 def otsu_threshold_full(gray_image: np.ndarray, hist: np.ndarray = None):
     """
     Phân đoạn Otsu tự cài đặt:
@@ -138,6 +346,9 @@ def enhance_color_image(image: np.ndarray,
                         r_max: float = None,
                         s_min: float = 0.0,
                         s_max: float = 255.0,
+                        clip_limit: float = 2.0,
+                        tile_grid: int = 8,
+                        gamma: float = 0.7,
                         lab_cache: tuple = None) -> np.ndarray:
     """
     Nâng cao chất lượng ảnh:
@@ -146,10 +357,17 @@ def enhance_color_image(image: np.ndarray,
       chỉ áp dụng nâng cao trên kênh độ sáng L (Lightness), sau đó
       ghép lại kênh A và B để bảo toàn màu sắc tự nhiên không bị sai màu.
     """
-    if image.ndim == 2:
+    def _apply_1ch(ch: np.ndarray) -> np.ndarray:
         if "Kéo giãn" in method:
-            return contrast_stretch(image, r_min=r_min, r_max=r_max, s_min=s_min, s_max=s_max)
-        return histogram_equalization(image)
+            return contrast_stretch(ch, r_min=r_min, r_max=r_max, s_min=s_min, s_max=s_max)
+        if "CLAHE" in method:
+            return clahe_enhance(ch, clip_limit=clip_limit, tile_grid=tile_grid)
+        if "Gamma" in method:
+            return gamma_correction(ch, gamma=gamma)
+        return histogram_equalization(ch)
+
+    if image.ndim == 2:
+        return _apply_1ch(image)
 
     if lab_cache is not None:
         lightness, a, b = lab_cache
@@ -157,10 +375,7 @@ def enhance_color_image(image: np.ndarray,
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
         lightness, a, b = cv2.split(lab)
 
-    if "Kéo giãn" in method:
-        new_lightness = contrast_stretch(lightness, r_min=r_min, r_max=r_max, s_min=s_min, s_max=s_max)
-    else:
-        new_lightness = histogram_equalization(lightness)
+    new_lightness = _apply_1ch(lightness)
     merged = cv2.merge((new_lightness, a, b))
     return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
 
@@ -853,7 +1068,7 @@ class ImageCanvas(QWidget):
         urls = event.mimeData().urls()
         if urls:
             path = urls[0].toLocalFile()
-            if Path(path).suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"):
+            if Path(path).is_file():
                 self.file_dropped.emit(path)
 
 
@@ -870,6 +1085,236 @@ class ZoomDialog(QDialog):
         canvas = ImageCanvas()
         canvas.set_image(image)
         lay.addWidget(canvas)
+
+
+class BatchAnalyticsDialog(QDialog):
+    """
+    Cửa sổ biểu đồ trực quan hóa kết quả thống kê nhiều ảnh & so sánh đối đầu
+    các phương pháp (HE vs Kéo giãn vs CLAHE vs Gamma) trên cùng thư mục ảnh.
+    Hỗ trợ xuất ảnh biểu đồ PNG chất lượng cao (200 DPI) cho báo cáo Word / Slide.
+    """
+    def __init__(self, results: list, folder: Path, compare_callback=None, parent=None):
+        super().__init__(parent)
+        self.results = results
+        self.folder = folder
+        self.compare_callback = compare_callback
+        self.comparison_data = None
+
+        n = len(results)
+        method_name = results[0]["method"] if results else ""
+        self.setWindowTitle(f"Biểu đồ thống kê thực nghiệm ({n} ảnh) — {folder.name if folder else ''}")
+        self.resize(1140, 720)
+        self.setStyleSheet("""
+            QDialog { background: #F4F6F9; font-family: 'Segoe UI', 'Tahoma', sans-serif; }
+            QPushButton { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 7px;
+                          padding: 6px 14px; color: #1E293B; font-size: 9.5pt; font-weight: 600; }
+            QPushButton:hover { background: #F8FAFC; border-color: #94A3B8; }
+            QPushButton#primary { background: #1B56B5; color: #FFFFFF; border: 1px solid #164899; font-weight: 700; }
+            QPushButton#primary:hover { background: #144493; }
+            QPushButton#accentTeal { background: #0F766E; color: #FFFFFF; border: 1px solid #0C5F59; font-weight: 700; }
+            QPushButton#accentTeal:hover { background: #0D625C; }
+        """)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(8)
+
+        # Thanh nút phía trên
+        top = QHBoxLayout()
+        top.setSpacing(8)
+        self.lbl_info = QLabel(
+            f"Tập ảnh: {folder.name if folder else '—'} ({n} ảnh)  •  Phương pháp đang xem: {method_name}"
+        )
+        self.lbl_info.setStyleSheet("font-size: 10pt; font-weight: 700; color: #0F172A;")
+        top.addWidget(self.lbl_info)
+        top.addStretch()
+
+        self.btn_compare_all = QPushButton("So sánh cả 4 phương pháp (HE / Kéo giãn / CLAHE / Gamma)")
+        self.btn_compare_all.setObjectName("accentTeal")
+        self.btn_compare_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_compare_all.clicked.connect(self.run_compare_all)
+        if compare_callback is None:
+            self.btn_compare_all.setVisible(False)
+        top.addWidget(self.btn_compare_all)
+
+        self.btn_save_png = QPushButton("Lưu biểu đồ PNG...")
+        self.btn_save_png.setObjectName("primary")
+        self.btn_save_png.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save_png.clicked.connect(self.save_chart_png)
+        top.addWidget(self.btn_save_png)
+        lay.addLayout(top)
+
+        # Khung Figure Matplotlib
+        card = QFrame()
+        card.setStyleSheet("QFrame { background: #FFFFFF; border: 1px solid #D8E0EA; border-radius: 10px; }")
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(8, 8, 8, 8)
+
+        self.figure = Figure(figsize=(11, 6.2), dpi=100, facecolor="#FFFFFF")
+        self.canvas = FigureCanvas(self.figure)
+        c_lay.addWidget(self.canvas, 1)
+        lay.addWidget(card, 1)
+
+        self._render_charts()
+
+    def _style_ax(self, ax):
+        ax.set_facecolor("#FFFFFF")
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        for sp in ("bottom", "left"):
+            ax.spines[sp].set_color("#CBD5E1")
+        ax.tick_params(labelsize=8.5, colors="#475569")
+        ax.grid(True, axis="y", linestyle="--", linewidth=0.6, color="#E2E8F0")
+        ax.set_axisbelow(True)
+
+    def _render_charts(self):
+        self.figure.clear()
+        res = self.results
+        if not res:
+            self.canvas.draw_idle()
+            return
+
+        n = len(res)
+        n_better = sum(1 for r in res if r["verdict"] == "Tốt hơn")
+        n_same = sum(1 for r in res if r["verdict"] == "Tương đương")
+        n_worse = sum(1 for r in res if r["verdict"] == "Xấu đi")
+
+        gs = self.figure.add_gridspec(2, 2, height_ratios=[1.0, 1.08], hspace=0.42, wspace=0.25)
+
+        # 1. Biểu đồ cột phân loại Tốt hơn / Tương đương / Xấu đi
+        ax1 = self.figure.add_subplot(gs[0, 0])
+        self._style_ax(ax1)
+        cats = ["Tốt hơn", "Tương đương", "Xấu đi"]
+        vals = [n_better, n_same, n_worse]
+        colors = ["#0F766E", "#64748B", "#DC2626"]
+        bars = ax1.bar(cats, vals, color=colors, width=0.52, edgecolor="none")
+        ax1.set_title(f"Phân loại chất lượng ({n} ảnh)", fontsize=10.5, fontweight="bold", color="#0F172A", pad=8)
+        ax1.set_ylabel("Số lượng ảnh", fontsize=8.5, fontweight="semibold", color="#334155")
+        ax1.set_ylim(0, max(vals) * 1.24 + 1)
+        for b, v in zip(bars, vals):
+            pct = v / n * 100.0
+            ax1.text(
+                b.get_x() + b.get_width() / 2.0, v + max(vals) * 0.03 + 0.2,
+                f"{v} ({pct:.1f}%)", ha="center", va="bottom",
+                fontsize=9, fontweight="bold", color="#0F172A"
+            )
+
+        # 2. Biểu đồ phân tán Độ tương phản σ (Trước vs Sau)
+        ax2 = self.figure.add_subplot(gs[0, 1])
+        self._style_ax(ax2)
+        ax2.grid(True, linestyle="--", linewidth=0.6, color="#E2E8F0")
+        s1 = np.array([r["std1"] for r in res], dtype=np.float32)
+        s2 = np.array([r["std2"] for r in res], dtype=np.float32)
+        verdicts = [r["verdict"] for r in res]
+        c_map = {"Tốt hơn": "#0F766E", "Tương đương": "#64748B", "Xấu đi": "#DC2626"}
+        for lbl in ("Tốt hơn", "Tương đương", "Xấu đi"):
+            idx = [i for i, v in enumerate(verdicts) if v == lbl]
+            if idx:
+                ax2.scatter(s1[idx], s2[idx], s=26, alpha=0.82, color=c_map[lbl], label=lbl, edgecolors="white", linewidths=0.4)
+        lim_max = max(float(s1.max()), float(s2.max()), 90.0) * 1.06
+        ax2.plot([0, lim_max], [0, lim_max], linestyle=":", color="#94A3B8", linewidth=1.2, label="Không đổi (σ_sau = σ_gốc)")
+        ax2.set_xlim(0, lim_max)
+        ax2.set_ylim(0, lim_max)
+        ax2.set_title("Độ tương phản σ: Ảnh gốc vs Sau nâng cao", fontsize=10.5, fontweight="bold", color="#0F172A", pad=8)
+        ax2.set_xlabel("σ ảnh gốc", fontsize=8.5, fontweight="semibold", color="#334155")
+        ax2.set_ylabel("σ sau nâng cao", fontsize=8.5, fontweight="semibold", color="#334155")
+        ax2.legend(fontsize=7.8, loc="lower right", frameon=True, facecolor="#F8FAFC", edgecolor="#E2E8F0")
+
+        # 3. Biểu đồ dưới: So sánh 4 phương pháp (nếu đã bấm so sánh) hoặc Phân bố thay đổi chỉ số TB
+        ax3 = self.figure.add_subplot(gs[1, :])
+        self._style_ax(ax3)
+        if self.comparison_data:
+            names = [d["short"] for d in self.comparison_data]
+            pct_better = [d["better_pct"] for d in self.comparison_data]
+            pct_worse = [d["worse_pct"] for d in self.comparison_data]
+            avg_ssim_100 = [d["avg_ssim"] * 100.0 for d in self.comparison_data]
+            x = np.arange(len(names))
+            w = 0.25
+
+            b1 = ax3.bar(x - w, pct_better, width=w, color="#0F766E", label="Tỷ lệ Tốt hơn (%)")
+            b2 = ax3.bar(x, pct_worse, width=w, color="#DC2626", label="Tỷ lệ Xấu đi (%)")
+            b3 = ax3.bar(x + w, avg_ssim_100, width=w, color="#1B56B5", label="SSIM trung bình (×100%)")
+
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(names, fontsize=9.2, fontweight="bold", color="#0F172A")
+            ax3.set_ylim(0, 116)
+            ax3.set_ylabel("Tỷ lệ (%)", fontsize=8.5, fontweight="semibold", color="#334155")
+            ax3.set_title(
+                f"So sánh đối đầu 4 phương pháp trên cùng thư mục ({n} ảnh)",
+                fontsize=10.5, fontweight="bold", color="#0F172A", pad=8
+            )
+            ax3.legend(fontsize=8.2, loc="upper right", ncol=3, frameon=True, facecolor="#F8FAFC", edgecolor="#E2E8F0")
+
+            for group in (b1, b2, b3):
+                for bar in group:
+                    h_val = bar.get_height()
+                    ax3.text(
+                        bar.get_x() + bar.get_width() / 2.0, h_val + 1.5,
+                        f"{h_val:.1f}%", ha="center", va="bottom",
+                        fontsize=8, fontweight="bold", color="#1E293B"
+                    )
+        else:
+            # Trước khi bấm so sánh 4 phương pháp: hiển thị so sánh TB 4 chỉ số Trước vs Sau
+            metrics_lbl = ["TB Mức xám (μ)", "TB Tương phản (σ)", "TB Entropy (H×10)", "TB Sắc nét (×5)"]
+            before_v = [
+                float(np.mean([r["mean1"] for r in res])),
+                float(np.mean([r["std1"] for r in res])),
+                float(np.mean([r["ent1"] for r in res])) * 10.0,
+                float(np.mean([r["sh1"] for r in res])) * 5.0,
+            ]
+            after_v = [
+                float(np.mean([r["mean2"] for r in res])),
+                float(np.mean([r["std2"] for r in res])),
+                float(np.mean([r["ent2"] for r in res])) * 10.0,
+                float(np.mean([r["sh2"] for r in res])) * 5.0,
+            ]
+            x = np.arange(len(metrics_lbl))
+            w = 0.30
+            b1 = ax3.bar(x - w / 2, before_v, width=w, color="#94A3B8", label="Ảnh gốc (TB)")
+            b2 = ax3.bar(x + w / 2, after_v, width=w, color="#1B56B5", label="Sau nâng cao (TB)")
+            ax3.set_xticks(x)
+            ax3.set_xticklabels(metrics_lbl, fontsize=9, fontweight="semibold", color="#0F172A")
+            ax3.set_ylim(0, max(max(before_v), max(after_v)) * 1.24 + 5)
+            ax3.set_title(
+                "So sánh giá trị trung bình toàn tập (Nhấn 'So sánh cả 4 phương pháp' ở góc trên để đối chiếu HE / Kéo giãn / CLAHE / Gamma)",
+                fontsize=9.5, fontweight="bold", color="#0F172A", pad=8
+            )
+            ax3.legend(fontsize=8.2, loc="upper right", frameon=True, facecolor="#F8FAFC", edgecolor="#E2E8F0")
+            for bar in b1:
+                v = bar.get_height()
+                ax3.text(bar.get_x() + bar.get_width() / 2.0, v + 1.5, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color="#475569", fontweight="bold")
+            for bar in b2:
+                v = bar.get_height()
+                ax3.text(bar.get_x() + bar.get_width() / 2.0, v + 1.5, f"{v:.1f}", ha="center", va="bottom", fontsize=8, color="#1B56B5", fontweight="bold")
+
+        self.figure.subplots_adjust(left=0.07, right=0.97, top=0.92, bottom=0.09)
+        self.canvas.draw_idle()
+
+    def run_compare_all(self):
+        if self.compare_callback is None:
+            return
+        self.btn_compare_all.setEnabled(False)
+        self.btn_compare_all.setText("Đang chạy so sánh 4 phương pháp...")
+        QApplication.processEvents()
+        try:
+            self.comparison_data = self.compare_callback()
+            self._render_charts()
+        finally:
+            self.btn_compare_all.setEnabled(True)
+            self.btn_compare_all.setText("So sánh cả 4 phương pháp (HE / Kéo giãn / CLAHE / Gamma)")
+
+    def save_chart_png(self):
+        default_name = f"BieuDo_ThongKe_{self.folder.name if self.folder else 'De13'}.png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Lưu ảnh biểu đồ thống kê", default_name, "PNG Image (*.png)"
+        )
+        if not path:
+            return
+        try:
+            self.figure.savefig(path, dpi=200, facecolor="#FFFFFF")
+            QMessageBox.information(self, "Lưu thành công", f"Đã lưu ảnh biểu đồ chất lượng cao (200 DPI) tại:\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "Lỗi khi lưu biểu đồ", str(exc))
 
 
 class PlotCanvas(FigureCanvas):
@@ -965,12 +1410,63 @@ class PlotCanvas(FigureCanvas):
         self.draw_idle()
 
 
+class MetricSubtitleDelegate(QStyledItemDelegate):
+    """Vẽ ô 2 dòng (tên chỉ số đậm ở trên + chú thích ngắn chữ bé ở dưới) mượt, không đè chữ."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._font_title_bold = QFont("Segoe UI", 9, QFont.Weight.Bold)
+        self._font_title_demi = QFont("Segoe UI", 9, QFont.Weight.DemiBold)
+        self._font_sub = QFont("Segoe UI", 7.6, QFont.Weight.Normal)
+
+    def paint(self, painter, option, index):
+        painter.save()
+        # Vẽ nền chuẩn (bao gồm màu xen kẽ dòng, nền nổi bật hoặc trạng thái chọn)
+        opt = option
+        if opt.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(opt.rect, QColor("#EFF6FF"))
+        else:
+            bg = index.data(Qt.ItemDataRole.BackgroundRole)
+            if bg is not None:
+                painter.fillRect(opt.rect, bg)
+            elif index.row() % 2 == 1:
+                painter.fillRect(opt.rect, QColor("#F8FAFC"))
+            else:
+                painter.fillRect(opt.rect, QColor("#FFFFFF"))
+
+        title = index.data(Qt.ItemDataRole.DisplayRole) or ""
+        subtitle = index.data(Qt.ItemDataRole.UserRole) or ""
+        is_bold = bool(index.data(Qt.ItemDataRole.UserRole + 1))
+
+        rect = opt.rect.adjusted(8, 3, -6, -3)
+        if subtitle:
+            top_rect = rect.adjusted(0, 0, 0, -rect.height() // 2 + 2)
+            bot_rect = rect.adjusted(0, rect.height() // 2 - 1, 0, 0)
+            painter.setFont(self._font_title_bold if is_bold else self._font_title_demi)
+            painter.setPen(QColor("#0F172A"))
+            painter.drawText(top_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+
+            painter.setFont(self._font_sub)
+            painter.setPen(QColor("#64748B"))
+            elided_sub = painter.fontMetrics().elidedText(subtitle, Qt.TextElideMode.ElideRight, bot_rect.width())
+            painter.drawText(bot_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, elided_sub)
+        else:
+            painter.setFont(self._font_title_bold if is_bold else self._font_title_demi)
+            painter.setPen(QColor("#0F172A"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, title)
+        painter.restore()
+
+
 # ============================================================
 # CỬA SỔ CHÍNH CỦA CHƯƠNG TRÌNH
 # ============================================================
 
 class ImageProcessingStudio(QMainWindow):
-    METHODS = ["Cân bằng histogram", "Kéo giãn tương phản"]
+    METHODS = [
+        "Cân bằng histogram",
+        "Kéo giãn tương phản",
+        "CLAHE (Cân bằng cục bộ)",
+        "Biến đổi Gamma (γ)",
+    ]
     VIEW_MODES = [
         "Mặt nạ nhị phân (Binary Mask)",
         "Phủ màu đối tượng (Color Overlay)",
@@ -1003,7 +1499,7 @@ class ImageProcessingStudio(QMainWindow):
         self.diff_map = None      # Bản đồ khác biệt
         self.gt_mask = None       # Mặt nạ chuẩn Ground Truth (tùy chọn)
         self.view_mode = self.VIEW_MODES[0]
-        self.batch_folder = DATASET_100_DIR if DATASET_100_DIR.exists() else None
+        self.batch_folder = None
         self.batch_results = []   # Danh sách kết quả thực nghiệm hàng loạt
 
         self._img_id = 0
@@ -1048,6 +1544,19 @@ class ImageProcessingStudio(QMainWindow):
 
         return lbl, slider, spin
 
+    def _make_param_group(self, title: str, widgets: list):
+        """Đóng khung nhóm tham số kèm tiêu đề nằm trên cạnh khung (giống khung chú thích kỹ thuật)."""
+        box = QGroupBox(title)
+        box.setObjectName("paramGroup")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(9, 4, 9, 4)
+        lay.setSpacing(6)
+        for i, w in enumerate(widgets):
+            if i == 3:
+                lay.addSpacing(6)
+            lay.addWidget(w)
+        return box
+
     def build_ui(self):
         central = QWidget()
         root = QVBoxLayout(central)
@@ -1055,18 +1564,23 @@ class ImageProcessingStudio(QMainWindow):
         root.setSpacing(8)
         self.setCentralWidget(central)
 
-        # 1. Thanh công cụ ngang cao cấp (Card Toolbar phân 3 nhóm rõ ràng)
+        # 1. Thanh công cụ ngang cao cấp (Card Toolbar gọn, rõ ràng)
         toolbar_card = QFrame()
         toolbar_card.setObjectName("toolbarCard")
         bar = QHBoxLayout(toolbar_card)
-        bar.setContentsMargins(12, 8, 12, 8)
-        bar.setSpacing(8)
+        bar.setContentsMargins(10, 6, 10, 6)
+        bar.setSpacing(5)
 
-        # Nhóm 1: Nguồn ảnh
-        self.btn_open = QPushButton("Chọn ảnh...")
-        self.btn_open.setObjectName("btnOpen")
+        # Nhóm 1: Chọn ảnh / tệp (menu chọn riêng ảnh đơn hoặc thư mục nhiều ảnh)
+        self.btn_open = QPushButton("Chọn ảnh/ tệp ")
+        self.btn_open.setObjectName("primary")
         self.btn_open.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_open.clicked.connect(self.open_dialog)
+        open_menu = QMenu(self)
+        act_open_img = open_menu.addAction("Chọn ảnh...")
+        act_open_img.triggered.connect(self.open_dialog)
+        act_open_dir = open_menu.addAction("Chọn thư mục ảnh (nhiều ảnh)...")
+        act_open_dir.triggered.connect(self.choose_batch_folder)
+        self.btn_open.setMenu(open_menu)
 
         self.btn_reset = QPushButton("Đặt lại")
         self.btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1078,7 +1592,7 @@ class ImageProcessingStudio(QMainWindow):
 
         self.combo_method = QComboBox()
         self.combo_method.addItems(self.METHODS)
-        self.combo_method.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.combo_method.setFixedWidth(182)
         self.combo_method.setCursor(Qt.CursorShape.PointingHandCursor)
         self.combo_method.currentTextChanged.connect(self.on_method_changed)
 
@@ -1092,11 +1606,24 @@ class ImageProcessingStudio(QMainWindow):
         self.btn_otsu.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_otsu.clicked.connect(self.apply_otsu)
 
-        self.chk_gray = QCheckBox("Xem ảnh xám")
-        self.chk_gray.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.chk_gray.toggled.connect(self.toggle_gray)
+        # Nhóm 3: Thống kê nhiều ảnh (chỉ sáng lên khi đã chọn thư mục tệp)
+        self.btn_run_batch = QPushButton("Chạy thống kê")
+        self.btn_run_batch.setObjectName("primary")
+        self.btn_run_batch.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_run_batch.clicked.connect(self.run_batch_benchmark)
 
-        # Nhóm 3: Xuất kết quả
+        self.lbl_batch_filter = QLabel("Lọc:")
+        self.lbl_batch_filter.setObjectName("toolbarLabel")
+        self.combo_batch_filter = QComboBox()
+        self.combo_batch_filter.addItems(["Tất cả ảnh", "Chỉ ảnh tốt hơn", "Chỉ ảnh xấu đi", "Chỉ ảnh tương đương"])
+        self.combo_batch_filter.setFixedWidth(134)
+        self.combo_batch_filter.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.combo_batch_filter.currentTextChanged.connect(self.refresh_batch_table)
+
+        self.lbl_batch_folder = QLabel("Nguồn: Chưa chọn")
+        self.lbl_batch_folder.setObjectName("logPathBadge")
+
+        # Nhóm 4: Xuất kết quả
         self.btn_save = QPushButton("Lưu ảnh...")
         self.btn_save.setObjectName("btnExport")
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1109,17 +1636,16 @@ class ImageProcessingStudio(QMainWindow):
 
         bar.addWidget(self.btn_open)
         bar.addWidget(self.btn_reset)
-        bar.addSpacing(4)
         bar.addWidget(self._make_vsep())
-        bar.addSpacing(4)
         bar.addWidget(lbl_method)
         bar.addWidget(self.combo_method)
         bar.addWidget(self.btn_apply)
         bar.addWidget(self.btn_otsu)
-        bar.addSpacing(4)
         bar.addWidget(self._make_vsep())
-        bar.addSpacing(4)
-        bar.addWidget(self.chk_gray)
+        bar.addWidget(self.btn_run_batch)
+        bar.addWidget(self.lbl_batch_filter)
+        bar.addWidget(self.combo_batch_filter)
+        bar.addWidget(self.lbl_batch_folder)
         bar.addStretch()
         bar.addWidget(self.btn_save)
         bar.addWidget(self.btn_report)
@@ -1129,32 +1655,35 @@ class ImageProcessingStudio(QMainWindow):
         self.stretch_card = QFrame()
         self.stretch_card.setObjectName("stretchParamCard")
         sbar = QHBoxLayout(self.stretch_card)
-        sbar.setContentsMargins(12, 6, 12, 6)
+        sbar.setContentsMargins(10, 4, 10, 5)
         sbar.setSpacing(8)
 
-        lbl_st_title = QLabel("Tham số kéo giãn:")
-        lbl_st_title.setObjectName("toolbarLabel")
-        sbar.addWidget(lbl_st_title)
+        self.chk_batch_auto = QCheckBox("Tự động Min-Max\ntừng ảnh")
+        self.chk_batch_auto.setChecked(True)
+        self.chk_batch_auto.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chk_batch_auto.setVisible(False)
+        sbar.addWidget(self.chk_batch_auto)
 
         lbl_rmin, self.sl_rmin, self.sp_rmin = self._make_slider_spin("r_min:", 0, 254, 0)
         lbl_rmax, self.sl_rmax, self.sp_rmax = self._make_slider_spin("r_max:", 1, 255, 255)
         lbl_smin, self.sl_smin, self.sp_smin = self._make_slider_spin("s_min:", 0, 254, 0)
         lbl_smax, self.sl_smax, self.sp_smax = self._make_slider_spin("s_max:", 1, 255, 255)
-        self.sl_smin.setFixedWidth(80)
-        self.sl_smax.setFixedWidth(80)
+        self.sl_rmin.setFixedWidth(90)
+        self.sl_rmax.setFixedWidth(90)
+        self.sl_smin.setFixedWidth(72)
+        self.sl_smax.setFixedWidth(72)
 
-        for w in (lbl_rmin, self.sl_rmin, self.sp_rmin):
-            sbar.addWidget(w)
-        sbar.addSpacing(4)
-        for w in (lbl_rmax, self.sl_rmax, self.sp_rmax):
-            sbar.addWidget(w)
-        sbar.addWidget(self._make_vsep())
-        for w in (lbl_smin, self.sl_smin, self.sp_smin):
-            sbar.addWidget(w)
-        sbar.addSpacing(4)
-        for w in (lbl_smax, self.sl_smax, self.sp_smax):
-            sbar.addWidget(w)
+        grp_in = self._make_param_group(
+            "Khoảng mức xám đầu vào",
+            [lbl_rmin, self.sl_rmin, self.sp_rmin, lbl_rmax, self.sl_rmax, self.sp_rmax]
+        )
+        grp_out = self._make_param_group(
+            "Khoảng mức xám đầu ra",
+            [lbl_smin, self.sl_smin, self.sp_smin, lbl_smax, self.sl_smax, self.sp_smax]
+        )
 
+        sbar.addWidget(grp_in)
+        sbar.addWidget(grp_out)
         sbar.addStretch()
 
         self.btn_auto_minmax = QPushButton("Lấy Min-Max ảnh")
@@ -1181,13 +1710,119 @@ class ImageProcessingStudio(QMainWindow):
         self.stretch_card.setVisible("Kéo giãn" in self.combo_method.currentText())
         root.addWidget(self.stretch_card)
 
+        # 1c. Thanh tham số CLAHE (hiện khi chọn 'CLAHE (Cân bằng cục bộ)')
+        self.clahe_card = QFrame()
+        self.clahe_card.setObjectName("stretchParamCard")
+        cbar = QHBoxLayout(self.clahe_card)
+        cbar.setContentsMargins(10, 4, 10, 5)
+        cbar.setSpacing(8)
+
+        lbl_cl = QLabel("Clip:")
+        lbl_cl.setObjectName("paramLabel")
+        self.sl_clip = QSlider(Qt.Orientation.Horizontal)
+        self.sl_clip.setRange(10, 100)   # 1.0 .. 10.0 (x10)
+        self.sl_clip.setValue(20)
+        self.sl_clip.setFixedWidth(120)
+        self.sl_clip.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sp_clip = QDoubleSpinBox()
+        self.sp_clip.setRange(1.0, 10.0)
+        self.sp_clip.setSingleStep(0.1)
+        self.sp_clip.setDecimals(1)
+        self.sp_clip.setValue(2.0)
+        self.sp_clip.setFixedWidth(64)
+
+        lbl_tile = QLabel("Lưới ô:")
+        lbl_tile.setObjectName("paramLabel")
+        self.sl_tile = QSlider(Qt.Orientation.Horizontal)
+        self.sl_tile.setRange(2, 16)
+        self.sl_tile.setValue(8)
+        self.sl_tile.setFixedWidth(110)
+        self.sl_tile.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sp_tile = QSpinBox()
+        self.sp_tile.setRange(2, 16)
+        self.sp_tile.setValue(8)
+        self.sp_tile.setSuffix("×N")
+        self.sp_tile.setFixedWidth(68)
+
+        grp_clip = self._make_param_group("Giới hạn tương phản (Clip Limit)", [lbl_cl, self.sl_clip, self.sp_clip])
+        grp_tile = self._make_param_group("Kích thước lưới cục bộ (Tile Grid)", [lbl_tile, self.sl_tile, self.sp_tile])
+        cbar.addWidget(grp_clip)
+        cbar.addWidget(grp_tile)
+        cbar.addStretch()
+
+        btn_clahe_default = QPushButton("Mặc định (2.0 / 8×8)")
+        btn_clahe_default.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clahe_default.clicked.connect(self.reset_clahe_defaults)
+        cbar.addWidget(btn_clahe_default)
+
+        btn_apply_clahe = QPushButton("Áp dụng CLAHE")
+        btn_apply_clahe.setObjectName("primary")
+        btn_apply_clahe.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_apply_clahe.clicked.connect(self.apply_enhancement)
+        cbar.addWidget(btn_apply_clahe)
+
+        self.sl_clip.valueChanged.connect(lambda v: self._sync_clahe_clip(v / 10.0))
+        self.sp_clip.valueChanged.connect(lambda v: self._sync_clahe_clip(v))
+        self.sl_tile.valueChanged.connect(lambda v: self._sync_clahe_tile(v))
+        self.sp_tile.valueChanged.connect(lambda v: self._sync_clahe_tile(v))
+
+        self.clahe_card.setVisible("CLAHE" in self.combo_method.currentText())
+        root.addWidget(self.clahe_card)
+
+        # 1d. Thanh tham số Gamma (hiện khi chọn 'Biến đổi Gamma (γ)')
+        self.gamma_card = QFrame()
+        self.gamma_card.setObjectName("stretchParamCard")
+        gbar = QHBoxLayout(self.gamma_card)
+        gbar.setContentsMargins(10, 4, 10, 5)
+        gbar.setSpacing(8)
+
+        lbl_g = QLabel("γ:")
+        lbl_g.setObjectName("paramLabel")
+        self.sl_gamma = QSlider(Qt.Orientation.Horizontal)
+        self.sl_gamma.setRange(20, 350)  # 0.20 .. 3.50 (x100)
+        self.sl_gamma.setValue(70)
+        self.sl_gamma.setFixedWidth(160)
+        self.sl_gamma.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sp_gamma = QDoubleSpinBox()
+        self.sp_gamma.setRange(0.20, 3.50)
+        self.sp_gamma.setSingleStep(0.05)
+        self.sp_gamma.setDecimals(2)
+        self.sp_gamma.setValue(0.70)
+        self.sp_gamma.setFixedWidth(70)
+
+        grp_gamma = self._make_param_group(
+            "Hệ số Gamma — s = 255·(r/255)^γ  (<1: tăng sáng, >1: giảm chói)",
+            [lbl_g, self.sl_gamma, self.sp_gamma]
+        )
+        gbar.addWidget(grp_gamma)
+
+        for label_p, g_val in (("Tăng sáng (0.6)", 0.60), ("Gốc (1.0)", 1.00), ("Giảm chói (1.6)", 1.60)):
+            bp = QPushButton(label_p)
+            bp.setCursor(Qt.CursorShape.PointingHandCursor)
+            bp.clicked.connect(lambda _checked=False, gv=g_val: self._sync_gamma(gv))
+            gbar.addWidget(bp)
+
+        gbar.addStretch()
+        btn_apply_gamma = QPushButton("Áp dụng Gamma")
+        btn_apply_gamma.setObjectName("primary")
+        btn_apply_gamma.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_apply_gamma.clicked.connect(self.apply_enhancement)
+        gbar.addWidget(btn_apply_gamma)
+
+        self.sl_gamma.valueChanged.connect(lambda v: self._sync_gamma(v / 100.0))
+        self.sp_gamma.valueChanged.connect(lambda v: self._sync_gamma(v))
+
+        self.gamma_card.setVisible("Gamma" in self.combo_method.currentText())
+        root.addWidget(self.gamma_card)
+
         self.btn_save.setEnabled(False)
         self.btn_report.setEnabled(False)
+        self._set_batch_controls_enabled(False)
 
-        # 2. Phân chia giao diện: Phần trên (2 ảnh) & Phần dưới (KPI + Tabs phân tích)
-        main_splitter = QSplitter(Qt.Orientation.Vertical)
-        main_splitter.setChildrenCollapsible(False)
-        main_splitter.setHandleWidth(8)
+        # 2. Phân chia giao diện: Phần trên (2 ảnh) & Phần dưới (Tabs phân tích)
+        self.main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.main_splitter.setChildrenCollapsible(False)
+        self.main_splitter.setHandleWidth(8)
 
         # Phần trên: So sánh Ảnh gốc vs Ảnh sau nâng cao
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1196,7 +1831,7 @@ class ImageProcessingStudio(QMainWindow):
 
         self.canvas_orig = ImageCanvas(
             placeholder="Kéo thả ảnh vào đây để bắt đầu",
-            subtext="Hoặc nhấn nút 'Chọn ảnh...' (Hỗ trợ PNG, JPG, BMP, TIFF)",
+            subtext="Hoặc nhấn 'Chọn ảnh/ tệp' (Hỗ trợ đa định dạng: PNG, JPG, WEBP, JFIF, BMP, TIFF, GIF...)",
             accept_drop=True
         )
         self.canvas_proc = ImageCanvas(
@@ -1208,22 +1843,36 @@ class ImageProcessingStudio(QMainWindow):
         self.canvas_orig.double_clicked.connect(lambda: self.zoom("Ảnh gốc", self.original))
         self.canvas_proc.double_clicked.connect(lambda: self.zoom("Ảnh sau nâng cao", self.processed))
 
+        # Di chuyển ô 'Xem ảnh xám' xuống header của từng khung Ảnh gốc & Ảnh sau nâng cao
+        self.chk_gray_orig = QCheckBox("Xem ảnh xám")
+        self.chk_gray_orig.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chk_gray_orig.toggled.connect(self.toggle_gray_orig)
+
+        self.chk_gray_proc = QCheckBox("Xem ảnh xám")
+        self.chk_gray_proc.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.chk_gray_proc.toggled.connect(self.toggle_gray_proc)
+
         self.badge_orig = QLabel("Chưa nạp ảnh")
         self.badge_proc = QLabel("Đang chờ xử lý")
         self.lbl_orig = QLabel("Thông số mức xám sẽ hiển thị sau khi nạp ảnh")
         self.lbl_proc = QLabel("Thông số so sánh sẽ hiển thị sau khi xử lý")
 
-        top_splitter.addWidget(self.create_card("Ảnh gốc", self.canvas_orig, self.lbl_orig, self.badge_orig))
-        top_splitter.addWidget(self.create_card("Ảnh sau nâng cao", self.canvas_proc, self.lbl_proc, self.badge_proc))
-        main_splitter.addWidget(top_splitter)
+        top_splitter.addWidget(
+            self.create_card("Ảnh gốc", self.canvas_orig, self.lbl_orig, self.badge_orig,
+                             header_extra=self.chk_gray_orig)
+        )
+        top_splitter.addWidget(
+            self.create_card("Ảnh sau nâng cao", self.canvas_proc, self.lbl_proc, self.badge_proc,
+                             header_extra=self.chk_gray_proc)
+        )
+        self.main_splitter.addWidget(top_splitter)
 
-        # Phần dưới: Hệ thống 5 Tab phân tích chuyên sâu
+        # Phần dưới: Hệ thống 4 Tab phân tích chuyên sâu
         bottom_container = QWidget()
         bottom_layout = QVBoxLayout(bottom_container)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(8)
 
-        # Hệ thống các Tab phân tích chuyên sâu
         self.tabs = QTabWidget()
 
         # Tab 1: Histogram
@@ -1306,11 +1955,15 @@ class ImageProcessingStudio(QMainWindow):
         l2_main.addWidget(otsu_splitter, 1)
         self.tabs.addTab(t2, "Phân đoạn Otsu && So sánh")
 
-        # Tab 3: Bảng so sánh chi tiết (2 bảng: Chỉ số trọng tâm tạo khác biệt + Phân bố chi tiết)
+        # Tab 3: Bảng so sánh chi tiết (Bảng 1 & Bảng 2 ở trên + Bảng thống kê nhiều ảnh tự hiện ở dưới)
         t3 = QWidget()
         l3 = QVBoxLayout(t3)
         l3.setContentsMargins(10, 8, 10, 10)
         l3.setSpacing(8)
+
+        self.t3_vsplitter = QSplitter(Qt.Orientation.Vertical)
+        self.t3_vsplitter.setChildrenCollapsible(False)
+        self.t3_vsplitter.setHandleWidth(8)
 
         t3_splitter = QSplitter(Qt.Orientation.Horizontal)
         t3_splitter.setChildrenCollapsible(False)
@@ -1321,11 +1974,13 @@ class ImageProcessingStudio(QMainWindow):
         self.table_key.setHorizontalHeaderLabels([
             "Chỉ số trọng tâm", "Ảnh gốc", "Sau nâng cao", "Chênh lệch / Giá trị", "Đánh giá khác biệt"
         ])
-        self.table_key.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table_key.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self.table_key.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table_key.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table_key.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         self.table_key.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table_key.setColumnWidth(0, 275)
+        self.table_key.setItemDelegateForColumn(0, MetricSubtitleDelegate(self.table_key))
         self.table_key.verticalHeader().setVisible(False)
         self.table_key.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table_key.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1339,10 +1994,12 @@ class ImageProcessingStudio(QMainWindow):
         self.table.setHorizontalHeaderLabels([
             "Chỉ số chi tiết", "Ảnh gốc", "Sau nâng cao", "Mức độ thay đổi (Δ)"
         ])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0, 248)
+        self.table.setItemDelegateForColumn(0, MetricSubtitleDelegate(self.table))
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1357,155 +2014,79 @@ class ImageProcessingStudio(QMainWindow):
             self.create_card("Bảng 2: Thông số phân bố & phân đoạn chi tiết", self.table, compact=True)
         )
         t3_splitter.setSizes([780, 480])
-        l3.addWidget(t3_splitter, 1)
-        self.tabs.addTab(t3, "Bảng so sánh chi tiết")
+        self.t3_vsplitter.addWidget(t3_splitter)
 
-        # Tab 4: Thực nghiệm hàng loạt 100 ảnh & Thống kê tốt hơn / xấu đi
-        t_batch = QWidget()
-        l_batch = QVBoxLayout(t_batch)
-        l_batch.setContentsMargins(10, 6, 10, 8)
-        l_batch.setSpacing(6)
+        # Khối thống kê thực nghiệm nhiều ảnh (ẩn mặc định, tự xuất hiện dưới Bảng 1 & Bảng 2 khi ấn 'Chạy thống kê')
+        self.batch_panel = QFrame()
+        self.batch_panel.setObjectName("cardCompact")
+        bp_lay = QVBoxLayout(self.batch_panel)
+        bp_lay.setContentsMargins(8, 6, 8, 8)
+        bp_lay.setSpacing(6)
 
-        # Thanh điều khiển thực nghiệm hàng loạt
-        batch_bar = QHBoxLayout()
-        batch_bar.setSpacing(6)
+        bp_hdr = QHBoxLayout()
+        bp_hdr.setSpacing(8)
+        lbl_bp_title = QLabel("Bảng 3: Thống kê thực nghiệm nhiều ảnh")
+        lbl_bp_title.setObjectName("cardTitleCompact")
+        bp_hdr.addWidget(lbl_bp_title)
 
-        self.btn_batch_folder = QPushButton("Chọn thư mục...")
-        self.btn_batch_folder.setObjectName("btnOpen")
-        self.btn_batch_folder.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_batch_folder.clicked.connect(self.choose_batch_folder)
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setFixedHeight(16)
+        self.batch_progress.setFixedWidth(180)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("%v/%m (%p%)")
+        self.batch_progress.setVisible(False)
+        bp_hdr.addWidget(self.batch_progress)
 
-        self.btn_gen_100 = QPushButton("Tạo 100 ảnh mẫu")
-        self.btn_gen_100.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_gen_100.clicked.connect(self.create_sample_100_dataset)
-
-        lbl_bm = QLabel("Thuật toán:")
-        lbl_bm.setObjectName("toolbarLabel")
-        self.combo_batch_method = QComboBox()
-        self.combo_batch_method.addItems(self.METHODS)
-        self.combo_batch_method.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.combo_batch_method.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.combo_batch_method.currentTextChanged.connect(self.on_batch_method_changed)
-
-        self.btn_run_batch = QPushButton("Chạy thống kê")
-        self.btn_run_batch.setObjectName("primary")
-        self.btn_run_batch.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_run_batch.clicked.connect(self.run_batch_benchmark)
-
-        lbl_bf = QLabel("Lọc:")
-        lbl_bf.setObjectName("toolbarLabel")
-        self.combo_batch_filter = QComboBox()
-        self.combo_batch_filter.addItems(["Tất cả ảnh", "Chỉ ảnh tốt hơn", "Chỉ ảnh xấu đi", "Chỉ ảnh tương đương"])
-        self.combo_batch_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.combo_batch_filter.currentTextChanged.connect(self.refresh_batch_table)
+        bp_hdr.addStretch()
+        self.btn_batch_charts = QPushButton("Biểu đồ thống kê...")
+        self.btn_batch_charts.setObjectName("accentTeal")
+        self.btn_batch_charts.setEnabled(False)
+        self.btn_batch_charts.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_batch_charts.clicked.connect(self.open_batch_analytics)
+        bp_hdr.addWidget(self.btn_batch_charts)
 
         self.btn_export_batch = QPushButton("Xuất CSV...")
         self.btn_export_batch.setObjectName("btnExport")
         self.btn_export_batch.setEnabled(False)
         self.btn_export_batch.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_batch.clicked.connect(self.export_batch_csv)
-
-        folder_text = (
-            f"Nguồn: {self.batch_folder.name}/"
-            if self.batch_folder else "Chưa chọn thư mục"
-        )
-        self.lbl_batch_folder = QLabel(folder_text)
-        self.lbl_batch_folder.setObjectName("logPathBadge")
-
-        self.batch_progress = QProgressBar()
-        self.batch_progress.setFixedHeight(18)
-        self.batch_progress.setFixedWidth(160)
-        self.batch_progress.setValue(0)
-        self.batch_progress.setFormat("%v/%m (%p%)")
-        self.batch_progress.setVisible(False)
-
-        batch_bar.addWidget(self.btn_batch_folder)
-        batch_bar.addWidget(self.btn_gen_100)
-        batch_bar.addWidget(self._make_vsep())
-        batch_bar.addWidget(lbl_bm)
-        batch_bar.addWidget(self.combo_batch_method)
-        batch_bar.addWidget(self.btn_run_batch)
-        batch_bar.addWidget(self._make_vsep())
-        batch_bar.addWidget(lbl_bf)
-        batch_bar.addWidget(self.combo_batch_filter)
-        batch_bar.addWidget(self.lbl_batch_folder)
-        batch_bar.addWidget(self.batch_progress)
-        batch_bar.addStretch()
-        batch_bar.addWidget(self.btn_export_batch)
-        l_batch.addLayout(batch_bar)
-
-        # Thanh tham số kéo giãn tương phản cho Tab 4 (hiện khi chọn 'Kéo giãn tương phản')
-        self.batch_stretch_card = QFrame()
-        self.batch_stretch_card.setObjectName("stretchParamCard")
-        bsbar = QHBoxLayout(self.batch_stretch_card)
-        bsbar.setContentsMargins(10, 5, 10, 5)
-        bsbar.setSpacing(7)
-
-        self.chk_batch_auto = QCheckBox("Tự động Min-Max từng ảnh")
-        self.chk_batch_auto.setChecked(True)
-        self.chk_batch_auto.setCursor(Qt.CursorShape.PointingHandCursor)
-        bsbar.addWidget(self.chk_batch_auto)
-        bsbar.addWidget(self._make_vsep())
-
-        b_lrmin, self.bsl_rmin, self.bsp_rmin = self._make_slider_spin("r_min:", 0, 254, 30)
-        b_lrmax, self.bsl_rmax, self.bsp_rmax = self._make_slider_spin("r_max:", 1, 255, 225)
-        b_lsmin, self.bsl_smin, self.bsp_smin = self._make_slider_spin("s_min:", 0, 254, 0)
-        b_lsmax, self.bsl_smax, self.bsp_smax = self._make_slider_spin("s_max:", 1, 255, 255)
-        self.bsl_rmin.setFixedWidth(90)
-        self.bsl_rmax.setFixedWidth(90)
-        self.bsl_smin.setFixedWidth(70)
-        self.bsl_smax.setFixedWidth(70)
-
-        for w in (b_lrmin, self.bsl_rmin, self.bsp_rmin, b_lrmax, self.bsl_rmax, self.bsp_rmax):
-            bsbar.addWidget(w)
-        bsbar.addWidget(self._make_vsep())
-        for w in (b_lsmin, self.bsl_smin, self.bsp_smin, b_lsmax, self.bsl_smax, self.bsp_smax):
-            bsbar.addWidget(w)
-        bsbar.addStretch()
-
-        self.btn_batch_apply_stretch = QPushButton("Áp dụng && Chạy")
-        self.btn_batch_apply_stretch.setObjectName("primary")
-        self.btn_batch_apply_stretch.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_batch_apply_stretch.clicked.connect(self.run_batch_benchmark)
-        bsbar.addWidget(self.btn_batch_apply_stretch)
-
-        self.bsl_rmin.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("rmin", v))
-        self.bsp_rmin.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("rmin", v))
-        self.bsl_rmax.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("rmax", v))
-        self.bsp_rmax.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("rmax", v))
-        self.bsl_smin.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("smin", v))
-        self.bsp_smin.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("smin", v))
-        self.bsl_smax.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("smax", v))
-        self.bsp_smax.valueChanged.connect(lambda v: self._sync_batch_stretch_pair("smax", v))
-
-        self.batch_stretch_card.setVisible("Kéo giãn" in self.combo_batch_method.currentText())
-        l_batch.addWidget(self.batch_stretch_card)
+        bp_hdr.addWidget(self.btn_export_batch)
+        bp_lay.addLayout(bp_hdr)
 
         # 4 thẻ tóm tắt kết quả thực nghiệm toàn tập (trung bình + số lượng tốt hơn / xấu đi)
         bkpi_row = QHBoxLayout()
         bkpi_row.setSpacing(8)
         self.bkpi_count_val, self.bkpi_count_sub, bk1 = self.create_kpi_card(
-            "PHÂN LOẠI TỐT HƠN / XẤU ĐI", "#0F766E", compact=True
+            "PHÂN LOẠI TỐT HƠN / XẤU ĐI", "#0F766E", compact=True,
+            desc="Đánh giá cải thiện / suy giảm chất lượng"
         )
         self.bkpi_mean_val, self.bkpi_mean_sub, bk2 = self.create_kpi_card(
-            "TRUNG BÌNH MỨC XÁM (μ) TOÀN TẬP", "#0F172A", compact=True
+            "TRUNG BÌNH MỨC XÁM (μ)", "#0F172A", compact=True,
+            desc="Độ sáng trung bình toàn bộ tập ảnh"
         )
         self.bkpi_std_val, self.bkpi_std_sub, bk3 = self.create_kpi_card(
-            "TRUNG BÌNH TƯƠNG PHẢN (σ)", "#1B56B5", compact=True
+            "TRUNG BÌNH TƯƠNG PHẢN (σ)", "#1B56B5", compact=True,
+            desc="Độ phân tán sáng – tối trung bình"
         )
         self.bkpi_qual_val, self.bkpi_qual_sub, bk4 = self.create_kpi_card(
-            "TRUNG BÌNH ENTROPY & SSIM", "#B45309", compact=True
+            "ENTROPY (H) & SSIM", "#B45309", compact=True,
+            desc="Độ giàu chi tiết & bảo toàn cấu trúc"
         )
         for bk in (bk1, bk2, bk3, bk4):
             bkpi_row.addWidget(bk, 1)
-        l_batch.addLayout(bkpi_row)
+        bp_lay.addLayout(bkpi_row)
 
         # Bảng danh sách kết quả từng ảnh (nhấp đúp để xem ảnh trực tiếp phía trên)
         self.table_batch = QTableWidget(0, 10)
         self.table_batch.setHorizontalHeaderLabels([
-            "STT", "Tên ảnh", "TB xám (μ)",
-            "Tương phản (σ)", "Entropy (H)",
-            "Sắc nét", "Bão hòa", "SSIM", "Kết luận", "Lý do phân loại (Nhấp đúp để xem)"
+            "STT", "Tên ảnh",
+            "TB xám (μ)\nĐộ sáng",
+            "Tương phản (σ)\nTách sáng–tối",
+            "Entropy (H)\nGiàu chi tiết",
+            "Sắc nét\nRõ biên Δ%",
+            "Bão hòa\nCháy/bệt Δ%",
+            "SSIM\nGiữ cấu trúc",
+            "Kết luận", "Lý do phân loại\n(Nhấp đúp để xem ảnh)"
         ])
         b_hdr = self.table_batch.horizontalHeader()
         for col_idx in (0, 2, 3, 4, 5, 6, 7, 8):
@@ -1519,11 +2100,14 @@ class ImageProcessingStudio(QMainWindow):
         self.table_batch.setAlternatingRowColors(True)
         self.table_batch.setShowGrid(False)
         self.table_batch.cellDoubleClicked.connect(self.on_batch_row_double_clicked)
-        l_batch.addWidget(self.table_batch, 1)
+        bp_lay.addWidget(self.table_batch, 1)
 
-        self.tabs.addTab(t_batch, "Thực nghiệm 100 ảnh")
+        self.batch_panel.setVisible(False)
+        self.t3_vsplitter.addWidget(self.batch_panel)
+        l3.addWidget(self.t3_vsplitter, 1)
+        self.tabs.addTab(t3, "Bảng so sánh chi tiết")
 
-        # Tab 5: Nhật ký & Lịch sử thao tác (Ghi bền vững vào file log theo ngày)
+        # Tab 4: Nhật ký & Lịch sử thao tác (Ghi bền vững vào file log theo ngày)
         t4 = QWidget()
         l4 = QVBoxLayout(t4)
         l4.setContentsMargins(10, 8, 10, 10)
@@ -1560,11 +2144,11 @@ class ImageProcessingStudio(QMainWindow):
         self.tabs.addTab(t4, "Nhật ký xử lý (Lịch sử)")
 
         bottom_layout.addWidget(self.tabs, 1)
-        main_splitter.addWidget(bottom_container)
-        main_splitter.setSizes([380, 410])
-        root.addWidget(main_splitter, 1)
+        self.main_splitter.addWidget(bottom_container)
+        self.main_splitter.setSizes([380, 410])
+        root.addWidget(self.main_splitter, 1)
 
-        self.statusBar().showMessage("Sẵn sàng — Nhấn 'Chọn ảnh...' hoặc kéo thả tệp ảnh vào khung bên trái.")
+        self.statusBar().showMessage("Sẵn sàng — Nhấn 'Chọn ảnh/ tệp' hoặc kéo thả tệp ảnh vào khung bên trái.")
         self.refresh_key_table()
         self.refresh_table()
         self.plot_h_orig.draw_histogram(None, "Histogram ảnh gốc")
@@ -1575,6 +2159,7 @@ class ImageProcessingStudio(QMainWindow):
         m = self.menuBar().addMenu("Tệp")
         for text, slot, key in (
             ("Mở ảnh...", self.open_dialog, "Ctrl+O"),
+            ("Mở thư mục ảnh...", self.choose_batch_folder, "Ctrl+Shift+O"),
             ("Lưu ảnh...", self.save_results, "Ctrl+S"),
             ("Xuất báo cáo...", self.export_report, None),
             ("Thoát", self.close, None)
@@ -1585,7 +2170,7 @@ class ImageProcessingStudio(QMainWindow):
             a.triggered.connect(slot)
             m.addAction(a)
 
-    def create_card(self, title, widget, label=None, badge=None, compact=False):
+    def create_card(self, title, widget, label=None, badge=None, compact=False, header_extra=None):
         card = QFrame()
         card.setObjectName("cardCompact" if compact else "card")
         lay = QVBoxLayout(card)
@@ -1604,6 +2189,9 @@ class ImageProcessingStudio(QMainWindow):
         lbl_title.setObjectName("cardTitleCompact" if compact else "cardTitle")
         h_lay.addWidget(lbl_title)
         h_lay.addStretch()
+
+        if header_extra is not None:
+            h_lay.addWidget(header_extra)
 
         if badge is not None:
             badge.setObjectName("cardBadge")
@@ -1633,10 +2221,10 @@ class ImageProcessingStudio(QMainWindow):
 
         return card
 
-    def create_kpi_card(self, title: str, accent_color: str, compact: bool = False):
+    def create_kpi_card(self, title: str, accent_color: str, compact: bool = False, desc: str = ""):
         card = QFrame()
         card.setObjectName("kpiCard")
-        card.setFixedHeight(64 if compact else 76)
+        card.setFixedHeight(74 if (compact and desc) else (64 if compact else 76))
         card.setStyleSheet("""
             QFrame#kpiCard {
                 background: #FFFFFF;
@@ -1645,7 +2233,7 @@ class ImageProcessingStudio(QMainWindow):
             }
         """)
         outer = QHBoxLayout(card)
-        outer.setContentsMargins(10, 6 if compact else 8, 12, 6 if compact else 8)
+        outer.setContentsMargins(10, 5 if compact else 8, 12, 5 if compact else 8)
         outer.setSpacing(10)
 
         accent_bar = QFrame()
@@ -1655,14 +2243,20 @@ class ImageProcessingStudio(QMainWindow):
 
         lay = QVBoxLayout()
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(1)
+        lay.setSpacing(0 if desc else 1)
 
-        title_pt = "7.5pt" if compact else "8pt"
-        val_pt = "11.5pt" if compact else "13.5pt"
-        sub_pt = "8pt" if compact else "8.5pt"
+        title_pt = "7.6pt" if compact else "8pt"
+        val_pt = "11.2pt" if compact else "13.5pt"
+        sub_pt = "7.8pt" if compact else "8.5pt"
 
         lbl_title = QLabel(title)
-        lbl_title.setStyleSheet(f"font-size: {title_pt}; font-weight: 700; color: #475569; letter-spacing: 0.2px;")
+        lbl_title.setStyleSheet(f"font-size: {title_pt}; font-weight: 700; color: #334155; letter-spacing: 0.2px;")
+        lay.addWidget(lbl_title)
+
+        if desc:
+            lbl_desc = QLabel(desc)
+            lbl_desc.setStyleSheet("font-size: 7.3pt; font-weight: 400; color: #64748B;")
+            lay.addWidget(lbl_desc)
 
         lbl_val = QLabel("—")
         lbl_val.setStyleSheet(f"font-size: {val_pt}; font-weight: 800; color: {accent_color};")
@@ -1670,7 +2264,6 @@ class ImageProcessingStudio(QMainWindow):
         lbl_sub = QLabel("Chưa có dữ liệu")
         lbl_sub.setStyleSheet(f"font-size: {sub_pt}; font-weight: 500; color: #64748B;")
 
-        lay.addWidget(lbl_title)
         lay.addWidget(lbl_val)
         lay.addWidget(lbl_sub)
         outer.addLayout(lay, 1)
@@ -1732,12 +2325,30 @@ class ImageProcessingStudio(QMainWindow):
                 border: 1px solid #C8D9F0;
                 border-radius: 9px;
             }}
+            QGroupBox#paramGroup {{
+                background: transparent;
+                border: 1.2px solid #93B5E1;
+                border-radius: 7px;
+                margin-top: 8px;
+                padding-top: 3px;
+                font-size: 8pt;
+                font-weight: 700;
+                color: #1E3A8A;
+            }}
+            QGroupBox#paramGroup::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 10px;
+                padding: 0 5px;
+                background: #F8FAFD;
+                color: #1E3A8A;
+            }}
             QLabel#paramLabel {{
                 font-size: 9pt;
                 font-weight: 700;
                 color: #1E3A8A;
             }}
-            QSpinBox {{
+            QSpinBox, QDoubleSpinBox {{
                 background: #FFFFFF;
                 border: 1px solid #CBD5E1;
                 border-radius: 6px;
@@ -1746,7 +2357,7 @@ class ImageProcessingStudio(QMainWindow):
                 font-weight: 700;
                 color: #0F172A;
             }}
-            QSpinBox:focus {{
+            QSpinBox:focus, QDoubleSpinBox:focus {{
                 border-color: #1B56B5;
             }}
             QSlider::groove:horizontal {{
@@ -1836,9 +2447,9 @@ class ImageProcessingStudio(QMainWindow):
                 background: #FFFFFF;
                 border: 1px solid #CBD5E1;
                 border-radius: 7px;
-                padding: 7px 14px;
+                padding: 6px 10px;
                 color: #1E293B;
-                font-size: 9.5pt;
+                font-size: 9.2pt;
                 font-weight: 600;
             }}
             QPushButton:hover {{
@@ -1878,9 +2489,9 @@ class ImageProcessingStudio(QMainWindow):
                 background: #1B56B5;
                 color: #FFFFFF;
                 border: 1px solid #164899;
-                font-size: 10pt;
+                font-size: 9.2pt;
                 font-weight: 700;
-                padding: 7px 18px;
+                padding: 6px 12px;
             }}
             QPushButton#primary:hover {{
                 background: #144493;
@@ -1888,15 +2499,43 @@ class ImageProcessingStudio(QMainWindow):
             QPushButton#primary:pressed {{
                 background: #0F3573;
             }}
+            QPushButton#primary:disabled {{
+                background: #DCE5F2;
+                color: #8A9BB3;
+                border: 1px solid #CBD5E1;
+            }}
+            QPushButton::menu-indicator {{
+                width: 12px;
+                subcontrol-position: right center;
+                subcontrol-origin: padding;
+                right: 6px;
+            }}
+            QMenu {{
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 4px;
+                font-size: 9.5pt;
+                font-weight: 600;
+                color: #0F172A;
+            }}
+            QMenu::item {{
+                padding: 7px 18px;
+                border-radius: 5px;
+            }}
+            QMenu::item:selected {{
+                background: #EFF6FF;
+                color: #1B56B5;
+            }}
 
             /* Nút hành động chính thứ 2: Phân đoạn Otsu */
             QPushButton#accentTeal {{
                 background: #0F766E;
                 color: #FFFFFF;
                 border: 1px solid #0C5F59;
-                font-size: 10pt;
+                font-size: 9.2pt;
                 font-weight: 700;
-                padding: 7px 18px;
+                padding: 6px 12px;
             }}
             QPushButton#accentTeal:hover {{
                 background: #0D625C;
@@ -1922,14 +2561,22 @@ class ImageProcessingStudio(QMainWindow):
                 background: #FFFFFF;
                 border: 1px solid #CBD5E1;
                 border-radius: 7px;
-                padding: 6px 12px;
-                min-width: 175px;
-                font-size: 9.5pt;
+                padding: 5px 8px;
+                min-width: 110px;
+                font-size: 9.2pt;
                 font-weight: 600;
                 color: #0F172A;
             }}
             QComboBox:hover {{
                 border-color: #64748B;
+            }}
+            QComboBox:disabled {{
+                background: #F1F5F9;
+                color: #94A3B8;
+                border-color: #E2E8F0;
+            }}
+            QLabel#toolbarLabel:disabled {{
+                color: #94A3B8;
             }}
             QComboBox::drop-down {{
                 border: none;
@@ -1970,10 +2617,15 @@ class ImageProcessingStudio(QMainWindow):
                 background: #F1F5F9;
                 color: #1E293B;
                 border: 1px solid #DCE3EC;
-                padding: 4px 10px;
+                padding: 5px 10px;
                 border-radius: 6px;
                 font-size: 9pt;
                 font-weight: 600;
+            }}
+            QLabel#logPathBadge:disabled {{
+                background: #F8FAFC;
+                color: #94A3B8;
+                border: 1px solid #E2E8F0;
             }}
 
             /* Hệ thống Tab */
@@ -2145,14 +2797,56 @@ class ImageProcessingStudio(QMainWindow):
         self.log("Đóng ứng dụng và kết thúc phiên làm việc.")
         super().closeEvent(event)
 
-    # ---------------- Tham số Kéo giãn tương phản tùy chỉnh ----------------
+    # ---------------- Tham số Kéo giãn / CLAHE / Gamma tùy chỉnh ----------------
     def on_method_changed(self, text: str):
         is_stretch = ("Kéo giãn" in text)
+        is_clahe = ("CLAHE" in text)
+        is_gamma = ("Gamma" in text)
         self.stretch_card.setVisible(is_stretch)
+        self.clahe_card.setVisible(is_clahe)
+        self.gamma_card.setVisible(is_gamma)
         if is_stretch and self.original is not None:
             self.fill_auto_stretch_bounds(silent=True)
 
-    def _sync_stretch_pair(self, which: str, val: int):
+    def _sync_clahe_clip(self, val: float):
+        val = max(1.0, min(10.0, round(float(val), 1)))
+        for w in (self.sl_clip, self.sp_clip):
+            w.blockSignals(True)
+        try:
+            self.sl_clip.setValue(int(round(val * 10)))
+            self.sp_clip.setValue(val)
+        finally:
+            for w in (self.sl_clip, self.sp_clip):
+                w.blockSignals(False)
+
+    def _sync_clahe_tile(self, val: int):
+        val = max(2, min(16, int(val)))
+        for w in (self.sl_tile, self.sp_tile):
+            w.blockSignals(True)
+        try:
+            self.sl_tile.setValue(val)
+            self.sp_tile.setValue(val)
+        finally:
+            for w in (self.sl_tile, self.sp_tile):
+                w.blockSignals(False)
+
+    def reset_clahe_defaults(self):
+        self._sync_clahe_clip(2.0)
+        self._sync_clahe_tile(8)
+        self.statusBar().showMessage("Đã đặt tham số CLAHE mặc định: Clip Limit = 2.0, Lưới ô = 8×8")
+
+    def _sync_gamma(self, val: float):
+        val = max(0.20, min(3.50, round(float(val), 2)))
+        for w in (self.sl_gamma, self.sp_gamma):
+            w.blockSignals(True)
+        try:
+            self.sl_gamma.setValue(int(round(val * 100)))
+            self.sp_gamma.setValue(val)
+        finally:
+            for w in (self.sl_gamma, self.sp_gamma):
+                w.blockSignals(False)
+
+    def _sync_stretch_pair(self, which: str, val: int, user_edit: bool = True):
         """Đồng bộ hai chiều QSlider <-> QSpinBox và bảo đảm r_min < r_max, s_min < s_max."""
         widgets = (
             self.sl_rmin, self.sp_rmin, self.sl_rmax, self.sp_rmax,
@@ -2192,6 +2886,8 @@ class ImageProcessingStudio(QMainWindow):
         finally:
             for w in widgets:
                 w.blockSignals(False)
+        if user_edit and self.chk_batch_auto.isVisible() and self.chk_batch_auto.isChecked():
+            self.chk_batch_auto.setChecked(False)
 
     def fill_auto_stretch_bounds(self, silent: bool = False):
         """Điền tự động ngưỡng [min, max] thực tế của ảnh hiện tại vào thanh kéo giãn."""
@@ -2204,10 +2900,10 @@ class ImageProcessingStudio(QMainWindow):
         r_max = int(lum.max())
         if r_max <= r_min:
             r_min, r_max = 0, 255
-        self._sync_stretch_pair("rmin", min(r_min, 254))
-        self._sync_stretch_pair("rmax", max(r_max, min(r_min, 254) + 1))
-        self._sync_stretch_pair("smin", 0)
-        self._sync_stretch_pair("smax", 255)
+        self._sync_stretch_pair("rmin", min(r_min, 254), user_edit=False)
+        self._sync_stretch_pair("rmax", max(r_max, min(r_min, 254) + 1), user_edit=False)
+        self._sync_stretch_pair("smin", 0, user_edit=False)
+        self._sync_stretch_pair("smax", 255, user_edit=False)
         if not silent:
             self.statusBar().showMessage(f"Đã đặt ngưỡng tự động theo ảnh gốc: r=[{r_min}, {r_max}] → s=[0, 255]")
 
@@ -2221,7 +2917,7 @@ class ImageProcessingStudio(QMainWindow):
 
     def open_dialog(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn ảnh đầu vào", "", "Ảnh (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+            self, "Chọn ảnh đầu vào", "", IMAGE_FILE_FILTER)
         if path:
             self.load_image(path)
 
@@ -2242,11 +2938,29 @@ class ImageProcessingStudio(QMainWindow):
                 self._orig_gray, self._proc_gray, s1=self._orig_stats, s2=self._proc_stats
             )
 
-    def load_image(self, path):
-        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    def _set_batch_controls_enabled(self, enabled: bool):
+        """Bật/làm mờ cụm điều khiển thống kê nhiều ảnh trên thanh công cụ."""
+        self.btn_run_batch.setEnabled(enabled)
+        self.lbl_batch_filter.setEnabled(enabled)
+        self.combo_batch_filter.setEnabled(enabled)
+        self.lbl_batch_folder.setEnabled(enabled)
+        self.chk_batch_auto.setVisible(enabled)
+
+    def load_image(self, path, from_batch: bool = False):
+        img = read_image_universal(path, grayscale=False)
         if img is None:
-            QMessageBox.warning(self, "Lỗi", "Không thể đọc tệp ảnh này.")
+            QMessageBox.warning(self, "Lỗi", "Không thể đọc tệp ảnh này (định dạng không hợp lệ hoặc tệp bị hỏng).")
             return
+        if not from_batch:
+            self.batch_folder = None
+            self.batch_results = []
+            self.lbl_batch_folder.setText("Nguồn: Chưa chọn")
+            self._set_batch_controls_enabled(False)
+            self.btn_export_batch.setEnabled(False)
+            self.btn_batch_charts.setEnabled(False)
+            self.batch_panel.setVisible(False)
+            self.main_splitter.setSizes([380, 410])
+
         self.path = path
         self.original = img
         self.processed = img.copy()
@@ -2268,8 +2982,8 @@ class ImageProcessingStudio(QMainWindow):
         self.clear_ground_truth(refresh=False, log_action=False)
         self.fill_auto_stretch_bounds(silent=True)
 
-        self.canvas_orig.set_image(img, self.chk_gray.isChecked())
-        self.canvas_proc.set_image(self.processed, self.chk_gray.isChecked())
+        self.canvas_orig.set_image(img, self.chk_gray_orig.isChecked())
+        self.canvas_proc.set_image(self.processed, self.chk_gray_proc.isChecked())
         h, w = img.shape[:2]
         channels = "RGB (3 kênh)" if img.ndim == 3 else "Ảnh xám (1 kênh)"
         self.badge_orig.setText(f"{w} × {h} px  •  {channels}")
@@ -2280,8 +2994,10 @@ class ImageProcessingStudio(QMainWindow):
         self.statusBar().showMessage(f"Đã mở: {Path(path).name}  ({w} × {h} px)")
         self.log(f"Mở ảnh thành công: {Path(path).name} ({w} x {h} px).")
 
-    def toggle_gray(self, checked):
+    def toggle_gray_orig(self, checked):
         self.canvas_orig.set_image(self.original, checked)
+
+    def toggle_gray_proc(self, checked):
         self.canvas_proc.set_image(self.processed, checked)
 
     def reset(self):
@@ -2292,7 +3008,7 @@ class ImageProcessingStudio(QMainWindow):
         self._update_proc_cache(is_same_as_orig=True)
         self.clear_otsu()
         self.fill_auto_stretch_bounds(silent=True)
-        self.canvas_proc.set_image(self.processed, self.chk_gray.isChecked())
+        self.canvas_proc.set_image(self.processed, self.chk_gray_proc.isChecked())
         self.refresh_all()
         self.log("Đặt lại ảnh về trạng thái ban đầu.")
         self.statusBar().showMessage("Đã đặt lại trạng thái ban đầu")
@@ -2313,6 +3029,23 @@ class ImageProcessingStudio(QMainWindow):
                 lab_cache=self._orig_lab
             )
             method_desc = f"{method} [{r_min}..{r_max} → {s_min}..{s_max}]"
+        elif "CLAHE" in method:
+            clip_val = self.sp_clip.value()
+            tile_val = self.sp_tile.value()
+            self.processed = enhance_color_image(
+                self.original, method,
+                clip_limit=clip_val, tile_grid=tile_val,
+                lab_cache=self._orig_lab
+            )
+            method_desc = f"CLAHE (clip={clip_val:.1f}, lưới={tile_val}×{tile_val})"
+        elif "Gamma" in method:
+            g_val = self.sp_gamma.value()
+            self.processed = enhance_color_image(
+                self.original, method,
+                gamma=g_val,
+                lab_cache=self._orig_lab
+            )
+            method_desc = f"Gamma (γ={g_val:.2f})"
         else:
             self.processed = enhance_color_image(self.original, method, lab_cache=self._orig_lab)
             method_desc = method
@@ -2320,7 +3053,7 @@ class ImageProcessingStudio(QMainWindow):
         self.method_used = method_desc
         self._update_proc_cache(is_same_as_orig=False)
         self.clear_otsu()
-        self.canvas_proc.set_image(self.processed, self.chk_gray.isChecked())
+        self.canvas_proc.set_image(self.processed, self.chk_gray_proc.isChecked())
         self.refresh_all()
         self.log(f"Áp dụng {method_desc} thành công trong {elapsed_ms:.1f} ms.")
         self.statusBar().showMessage(f"Đã hoàn thành {method_desc} ({elapsed_ms:.1f} ms)")
@@ -2437,10 +3170,10 @@ class ImageProcessingStudio(QMainWindow):
         if not self.need_image():
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Chọn mặt nạ chuẩn Ground Truth", "", "Ảnh (*.png *.jpg *.jpeg *.bmp *.tif)")
+            self, "Chọn mặt nạ chuẩn Ground Truth", "", IMAGE_FILE_FILTER)
         if not path:
             return
-        gt = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+        gt = read_image_universal(path, grayscale=True)
         if gt is None:
             QMessageBox.warning(self, "Lỗi", "Không thể đọc tệp Ground Truth.")
             return
@@ -2611,120 +3344,89 @@ class ImageProcessingStudio(QMainWindow):
             for k in default_keys:
                 rows.append((k, "—", "—", "—", "Chưa có dữ liệu"))
 
-        self.table_key.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            is_summary = (r == len(rows) - 1)
-            self.table_key.setRowHeight(r, 34 if is_summary else 30)
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                if is_summary:
-                    item.setBackground(QColor("#F1F5F9"))
-                if c == 0:
-                    item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold))
-                    item.setForeground(QColor("#0F172A"))
-                elif c in (1, 2):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold if c == 2 else QFont.Weight.Medium))
-                    item.setForeground(QColor("#1B56B5" if (c == 2 and val not in ("—", "Sau xử lý")) else "#1E293B"))
-                elif c == 3:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold))
-                    if "TỐT HƠN" in val:
-                        item.setForeground(QColor("#0F766E"))
-                    elif "XẤU ĐI" in val:
-                        item.setForeground(QColor("#B91C1C"))
-                    else:
-                        item.setForeground(QColor("#1E3A8A"))
-                else:
-                    item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold if is_summary else QFont.Weight.DemiBold))
-                    if any(k in val for k in ("rõ rệt", "rõ hơn", "Tăng", "Mở rộng", "Bảo toàn", "Kiểm soát", "cân bằng")):
-                        item.setForeground(QColor("#0F766E"))
-                    elif any(k in val for k in ("Cảnh báo", "Biến đổi cấu trúc mạnh", "Giảm", "Dịch chuyển độ sáng mạnh")):
-                        item.setForeground(QColor("#B91C1C"))
-                    else:
-                        item.setForeground(QColor("#334155"))
-                self.table_key.setItem(r, c, item)
+        key_desc = {
+            "Độ tương phản (σ) & CII": "Mức tách biệt sáng – tối & hệ số tăng tương phản",
+            "Độ sắc nét biên (Gradient)": "Độ rõ đường viền, chi tiết biên vật thể",
+            "Entropy thông tin (H - bit)": "Độ phong phú sắc độ mức xám (tối đa 8 bit)",
+            "Dải động mức xám [min..max]": "Độ rộng khoảng cường độ sáng ảnh sử dụng",
+            "Tỷ lệ bão hòa sáng/tối (Clip)": "% pixel đen bệt (≤2) hoặc cháy trắng (≥253)",
+            "Độ lệch sáng trung bình (AMBE)": "Mức thay đổi độ sáng trung bình |μ_sau - μ_gốc|",
+            "Tương đồng cấu trúc (SSIM / PSNR)": "Mức bảo toàn cấu trúc tự nhiên so với ảnh gốc",
+            "Tác động lên phân đoạn Otsu": "Độ dịch ngưỡng T & độ trùng khớp mặt nạ IoU/Dice",
+            "ĐÁNH GIÁ TỔNG HỢP CHẤT LƯỢNG": "Kết luận cải thiện / suy giảm theo điểm ΔQ",
+        }
 
-    # ---------------- Thực nghiệm hàng loạt 100 ảnh ----------------
+        self.table_key.setUpdatesEnabled(False)
+        try:
+            self.table_key.setRowCount(len(rows))
+            for r, row in enumerate(rows):
+                is_summary = (r == len(rows) - 1)
+                self.table_key.setRowHeight(r, 42 if is_summary else 40)
+                for c, val in enumerate(row):
+                    item = QTableWidgetItem(val)
+                    if is_summary:
+                        item.setBackground(QColor("#F1F5F9"))
+                    if c == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, key_desc.get(val, ""))
+                        item.setData(Qt.ItemDataRole.UserRole + 1, True)
+                    elif c in (1, 2):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold if c == 2 else QFont.Weight.Medium))
+                        item.setForeground(QColor("#1B56B5" if (c == 2 and val not in ("—", "Sau xử lý")) else "#1E293B"))
+                    elif c == 3:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold))
+                        if "TỐT HƠN" in val:
+                            item.setForeground(QColor("#0F766E"))
+                        elif "XẤU ĐI" in val:
+                            item.setForeground(QColor("#B91C1C"))
+                        else:
+                            item.setForeground(QColor("#1E3A8A"))
+                    else:
+                        item.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold if is_summary else QFont.Weight.DemiBold))
+                        if any(k in val for k in ("rõ rệt", "rõ hơn", "Tăng", "Mở rộng", "Bảo toàn", "Kiểm soát", "cân bằng")):
+                            item.setForeground(QColor("#0F766E"))
+                        elif any(k in val for k in ("Cảnh báo", "Biến đổi cấu trúc mạnh", "Giảm", "Dịch chuyển độ sáng mạnh")):
+                            item.setForeground(QColor("#B91C1C"))
+                        else:
+                            item.setForeground(QColor("#334155"))
+                    self.table_key.setItem(r, c, item)
+        finally:
+            self.table_key.setUpdatesEnabled(True)
+
+    # ---------------- Thực nghiệm hàng loạt nhiều ảnh ----------------
     def choose_batch_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục chứa ảnh thực nghiệm (VD: 100 ảnh)")
+        folder = QFileDialog.getExistingDirectory(self, "Chọn thư mục chứa ảnh thực nghiệm")
         if not folder:
             return
         self.batch_folder = Path(folder)
-        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-        imgs = sorted([p for p in self.batch_folder.iterdir() if p.is_file() and p.suffix.lower() in exts])
+        imgs = sorted([
+            p for p in self.batch_folder.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTS
+        ])
         self.lbl_batch_folder.setText(f"Nguồn: {self.batch_folder.name}/ ({len(imgs)} ảnh)")
-        self.log(f"Chọn thư mục thực nghiệm hàng loạt: {self.batch_folder} ({len(imgs)} ảnh).")
-
-    def create_sample_100_dataset(self):
-        self.statusBar().showMessage("Đang khởi tạo bộ 100 ảnh thực nghiệm đa dạng...")
-        QApplication.processEvents()
-        paths = generate_diverse_100_dataset(DATASET_100_DIR)
-        self.batch_folder = DATASET_100_DIR
-        self.lbl_batch_folder.setText(f"Nguồn: {DATASET_100_DIR.name}/ ({len(paths)} ảnh)")
-        self.log(f"Đã tạo thành công bộ {len(paths)} ảnh mẫu đa dạng tại {DATASET_100_DIR}.")
-        self.statusBar().showMessage(f"Đã tạo {len(paths)} ảnh mẫu đa dạng tại {DATASET_100_DIR.name}/ — nhấn 'Chạy thống kê' để bắt đầu.")
-
-    def on_batch_method_changed(self, text: str):
-        self.batch_stretch_card.setVisible("Kéo giãn" in text)
-
-    def _sync_batch_stretch_pair(self, which: str, val: int):
-        """Đồng bộ hai chiều Slider <-> SpinBox cho Tab 4 và tự chuyển sang chế độ tùy chỉnh."""
-        widgets = (
-            self.bsl_rmin, self.bsp_rmin, self.bsl_rmax, self.bsp_rmax,
-            self.bsl_smin, self.bsp_smin, self.bsl_smax, self.bsp_smax,
+        self._set_batch_controls_enabled(True)
+        self.statusBar().showMessage(
+            f"Đã chọn thư mục {self.batch_folder.name}/ ({len(imgs)} ảnh) — nhấn 'Chạy thống kê' để thực hiện."
         )
-        for w in widgets:
-            w.blockSignals(True)
-        try:
-            if which == "rmin":
-                val = max(0, min(254, val))
-                self.bsl_rmin.setValue(val)
-                self.bsp_rmin.setValue(val)
-                if self.bsp_rmax.value() <= val:
-                    self.bsl_rmax.setValue(val + 1)
-                    self.bsp_rmax.setValue(val + 1)
-            elif which == "rmax":
-                val = max(1, min(255, val))
-                self.bsl_rmax.setValue(val)
-                self.bsp_rmax.setValue(val)
-                if self.bsp_rmin.value() >= val:
-                    self.bsl_rmin.setValue(val - 1)
-                    self.bsp_rmin.setValue(val - 1)
-            elif which == "smin":
-                val = max(0, min(254, val))
-                self.bsl_smin.setValue(val)
-                self.bsp_smin.setValue(val)
-                if self.bsp_smax.value() <= val:
-                    self.bsl_smax.setValue(val + 1)
-                    self.bsp_smax.setValue(val + 1)
-            elif which == "smax":
-                val = max(1, min(255, val))
-                self.bsl_smax.setValue(val)
-                self.bsp_smax.setValue(val)
-                if self.bsp_smin.value() >= val:
-                    self.bsl_smin.setValue(val - 1)
-                    self.bsp_smin.setValue(val - 1)
-        finally:
-            for w in widgets:
-                w.blockSignals(False)
-        # Khi người dùng kéo/nhập số trực tiếp -> tự động tắt chế độ Auto Min-Max
-        if self.chk_batch_auto.isChecked():
-            self.chk_batch_auto.setChecked(False)
+        self.log(f"Chọn thư mục thực nghiệm hàng loạt: {self.batch_folder} ({len(imgs)} ảnh).")
 
     @staticmethod
     def _eval_batch_item(args):
-        idx, fpath, method, stretch_params, method_desc = args
-        im = cv2.imdecode(np.fromfile(str(fpath), dtype=np.uint8), cv2.IMREAD_COLOR)
+        idx, fpath, method, params, method_desc = args
+        im = read_image_universal(fpath, grayscale=False)
         if im is None:
             return None
-        if stretch_params is not None:
-            r_min, r_max, s_min, s_max = stretch_params
-            proc = enhance_color_image(
-                im, method, r_min=r_min, r_max=r_max, s_min=s_min, s_max=s_max
-            )
-        else:
-            proc = enhance_color_image(im, method)
+        kwargs = {}
+        if "Kéo giãn" in method and params is not None:
+            r_min, r_max, s_min, s_max = params
+            kwargs.update(r_min=r_min, r_max=r_max, s_min=s_min, s_max=s_max)
+        elif "CLAHE" in method and params is not None:
+            clip_val, tile_val = params
+            kwargs.update(clip_limit=clip_val, tile_grid=tile_val)
+        elif "Gamma" in method and params is not None:
+            kwargs.update(gamma=params)
+        proc = enhance_color_image(im, method, **kwargs)
         g1, g2 = to_gray(im), to_gray(proc)
         h1, h2 = calculate_histogram(g1), calculate_histogram(g2)
         s1 = calculate_image_stats(g1, hist=h1)
@@ -2739,7 +3441,7 @@ class ImageProcessingStudio(QMainWindow):
             "name": fpath.name,
             "method": method_desc,
             "base_method": method,
-            "stretch_params": stretch_params,
+            "stretch_params": params,
             "mean1": s1["mean"], "mean2": s2["mean"],
             "std1": s1["std"], "std2": s2["std"],
             "ent1": s1["entropy"], "ent2": s2["entropy"],
@@ -2751,40 +3453,56 @@ class ImageProcessingStudio(QMainWindow):
 
     def run_batch_benchmark(self):
         if self.batch_folder is None or not self.batch_folder.exists():
-            # Nếu chưa có thư mục, tự động tạo bộ 100 ảnh mẫu để chạy ngay
-            self.create_sample_100_dataset()
+            QMessageBox.information(self, "Thông báo", "Vui lòng chọn thư mục ảnh từ nút 'Chọn ảnh/ tệp' trước.")
+            return
 
-        exts = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
-        img_files = sorted([p for p in self.batch_folder.iterdir() if p.is_file() and p.suffix.lower() in exts])
+        img_files = sorted([
+            p for p in self.batch_folder.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTS
+        ])
         if not img_files:
             QMessageBox.information(self, "Thông báo", "Thư mục đã chọn không có tệp ảnh hợp lệ.")
             return
 
-        method = self.combo_batch_method.currentText()
-        stretch_params = None
+        method = self.combo_method.currentText()
+        params = None
         if "Kéo giãn" in method:
             if not self.chk_batch_auto.isChecked():
-                r_min = self.bsp_rmin.value()
-                r_max = self.bsp_rmax.value()
-                s_min = self.bsp_smin.value()
-                s_max = self.bsp_smax.value()
-                stretch_params = (r_min, r_max, s_min, s_max)
+                r_min = self.sp_rmin.value()
+                r_max = self.sp_rmax.value()
+                s_min = self.sp_smin.value()
+                s_max = self.sp_smax.value()
+                params = (r_min, r_max, s_min, s_max)
                 method_desc = f"{method} [{r_min}..{r_max} → {s_min}..{s_max}]"
             else:
                 method_desc = f"{method} (Tự động Min-Max)"
+        elif "CLAHE" in method:
+            clip_val = self.sp_clip.value()
+            tile_val = self.sp_tile.value()
+            params = (clip_val, tile_val)
+            method_desc = f"CLAHE (clip={clip_val:.1f}, lưới={tile_val}×{tile_val})"
+        elif "Gamma" in method:
+            g_val = self.sp_gamma.value()
+            params = g_val
+            method_desc = f"Gamma (γ={g_val:.2f})"
         else:
             method_desc = method
+
+        # Tự động mở Tab 'Bảng so sánh chi tiết' và hiển thị khối thống kê dưới Bảng 1 & Bảng 2
+        self.batch_panel.setVisible(True)
+        self.tabs.setCurrentIndex(2)
+        self.main_splitter.setSizes([240, 560])
+        self.t3_vsplitter.setSizes([165, 355])
 
         self.batch_progress.setVisible(True)
         self.batch_progress.setMaximum(len(img_files))
         self.batch_progress.setValue(0)
         self.btn_run_batch.setEnabled(False)
-        self.btn_batch_apply_stretch.setEnabled(False)
         QApplication.processEvents()
 
         results = []
         t_start = time.perf_counter()
-        tasks = [(idx, fpath, method, stretch_params, method_desc)
+        tasks = [(idx, fpath, method, params, method_desc)
                  for idx, fpath in enumerate(img_files, start=1)]
         workers = max(2, min(8, os.cpu_count() or 4))
 
@@ -2798,12 +3516,12 @@ class ImageProcessingStudio(QMainWindow):
                         QApplication.processEvents()
         finally:
             self.btn_run_batch.setEnabled(True)
-            self.btn_batch_apply_stretch.setEnabled(True)
             self.batch_progress.setVisible(False)
 
         total_sec = time.perf_counter() - t_start
         self.batch_results = results
         self.btn_export_batch.setEnabled(len(results) > 0)
+        self.btn_batch_charts.setEnabled(len(results) > 0)
         self._update_batch_summary(results, total_sec)
         self.refresh_batch_table()
 
@@ -2820,6 +3538,55 @@ class ImageProcessingStudio(QMainWindow):
             f"Hoàn thành thống kê {n} ảnh ({method_desc}) trong {total_sec:.2f}s — "
             f"Tốt hơn: {n_better} | Xấu đi: {n_worse} | Tương đương: {n_same}"
         )
+
+    def _compare_all_methods_on_folder(self) -> list:
+        """Chạy đối chiếu nhanh cả 4 phương pháp (HE, Kéo giãn, CLAHE, Gamma) trên cùng thư mục hiện tại."""
+        if self.batch_folder is None or not self.batch_folder.exists():
+            return []
+        img_files = sorted([
+            p for p in self.batch_folder.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_IMAGE_EXTS
+        ])
+        if not img_files:
+            return []
+
+        clip_val = self.sp_clip.value()
+        tile_val = self.sp_tile.value()
+        gamma_val = self.sp_gamma.value()
+        configs = [
+            ("HE (Toàn cục)", "Cân bằng histogram", None, "Cân bằng histogram"),
+            ("Kéo giãn (Auto)", "Kéo giãn tương phản", None, "Kéo giãn tương phản"),
+            (f"CLAHE ({clip_val:.1f}/{tile_val}×{tile_val})", "CLAHE (Cân bằng cục bộ)", (clip_val, tile_val), f"CLAHE ({clip_val:.1f})"),
+            (f"Gamma (γ={gamma_val:.2f})", "Biến đổi Gamma (γ)", gamma_val, f"Gamma ({gamma_val:.2f})"),
+        ]
+
+        summary = []
+        workers = max(2, min(8, os.cpu_count() or 4))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for short_name, method, params, desc in configs:
+                tasks = [(i, p, method, params, desc) for i, p in enumerate(img_files, start=1)]
+                recs = [r for r in pool.map(self._eval_batch_item, tasks) if r is not None]
+                n = max(1, len(recs))
+                nb = sum(1 for r in recs if r["verdict"] == "Tốt hơn")
+                nw = sum(1 for r in recs if r["verdict"] == "Xấu đi")
+                summary.append({
+                    "short": short_name,
+                    "better_pct": nb / n * 100.0,
+                    "worse_pct": nw / n * 100.0,
+                    "avg_ssim": float(np.mean([r["ssim"] for r in recs])) if recs else 0.0,
+                    "avg_std": float(np.mean([r["std2"] for r in recs])) if recs else 0.0,
+                })
+        return summary
+
+    def open_batch_analytics(self):
+        if not self.batch_results:
+            return
+        dlg = BatchAnalyticsDialog(
+            self.batch_results, self.batch_folder,
+            compare_callback=self._compare_all_methods_on_folder,
+            parent=self
+        )
+        dlg.exec()
 
     def _update_batch_summary(self, results: list, elapsed_sec: float):
         if not results:
@@ -2890,7 +3657,7 @@ class ImageProcessingStudio(QMainWindow):
                     if c == 0:
                         cell.setData(Qt.ItemDataRole.UserRole, (
                             item_data["path"],
-                            item_data.get("base_method", self.combo_batch_method.currentText()),
+                            item_data.get("base_method", self.combo_method.currentText()),
                             item_data.get("stretch_params"),
                         ))
                         cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2925,7 +3692,7 @@ class ImageProcessingStudio(QMainWindow):
             self.table_batch.setUpdatesEnabled(True)
 
     def on_batch_row_double_clicked(self, row: int, _col: int):
-        """Nhấp đúp vào bất kỳ ảnh nào trong bảng 100 ảnh để nạp và đối chiếu đúng tham số đã chạy."""
+        """Nhấp đúp vào bất kỳ ảnh nào trong bảng thống kê để nạp và đối chiếu đúng tham số đã chạy."""
         cell0 = self.table_batch.item(row, 0)
         if cell0 is None:
             return
@@ -2936,16 +3703,22 @@ class ImageProcessingStudio(QMainWindow):
         if not img_path or not Path(img_path).exists():
             return
         self.combo_method.setCurrentText(base_method)
-        self.load_image(img_path)
+        self.load_image(img_path, from_batch=True)
         if "Kéo giãn" in base_method:
             if stretch_params is not None:
                 r_min, r_max, s_min, s_max = stretch_params
-                self._sync_stretch_pair("rmin", r_min)
-                self._sync_stretch_pair("rmax", r_max)
-                self._sync_stretch_pair("smin", s_min)
-                self._sync_stretch_pair("smax", s_max)
+                self._sync_stretch_pair("rmin", r_min, user_edit=False)
+                self._sync_stretch_pair("rmax", r_max, user_edit=False)
+                self._sync_stretch_pair("smin", s_min, user_edit=False)
+                self._sync_stretch_pair("smax", s_max, user_edit=False)
             else:
                 self.fill_auto_stretch_bounds(silent=True)
+        elif "CLAHE" in base_method and stretch_params is not None:
+            clip_val, tile_val = stretch_params
+            self._sync_clahe_clip(clip_val)
+            self._sync_clahe_tile(tile_val)
+        elif "Gamma" in base_method and stretch_params is not None:
+            self._sync_gamma(stretch_params)
         self.apply_enhancement()
         self.statusBar().showMessage(f"Đang xem chi tiết ảnh thực nghiệm: {Path(img_path).name}")
 
@@ -3061,34 +3834,61 @@ class ImageProcessingStudio(QMainWindow):
             "Dice so với Ground Truth",
         }
 
-        self.table.setRowCount(len(data_rows))
-        for r, row in enumerate(data_rows):
-            self.table.setRowHeight(r, 32)
-            metric_name = row[0]
-            is_key = metric_name in key_metrics
-            for c, val in enumerate(row):
-                item = QTableWidgetItem(val)
-                if c == 0:
-                    weight = QFont.Weight.Bold if is_key else QFont.Weight.DemiBold
-                    item.setFont(QFont("Segoe UI", 9.5, weight))
-                    item.setForeground(QColor("#0F172A"))
-                elif c in (1, 2):
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    weight = QFont.Weight.Bold if (is_key and c == 2) else QFont.Weight.Medium
-                    item.setFont(QFont("Segoe UI", 9.5, weight))
-                    item.setForeground(QColor("#1B56B5" if (is_key and c == 2 and val != "-") else "#1E293B"))
-                else:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold if is_key else QFont.Weight.DemiBold))
-                    if any(k in val for k in ("Tăng", "Mở rộng", "Cải thiện")):
-                        item.setForeground(QColor("#0F766E"))
-                    elif "IoU" in metric_name or "Dice" in metric_name:
-                        item.setForeground(QColor("#1B56B5"))
-                    elif "Giảm" in val or val.startswith("-"):
-                        item.setForeground(QColor("#B45309"))
+        detail_desc = {
+            "Mức xám nhỏ nhất (min)": "Điểm ảnh tối nhất trong ảnh (0..255)",
+            "Mức xám lớn nhất (max)": "Điểm ảnh sáng nhất trong ảnh (0..255)",
+            "Dải động (max - min)": "Độ rộng dải mức xám thực tế của ảnh",
+            "Giá trị xám trung bình": "Độ sáng trung bình toàn ảnh (μ)",
+            "Độ lệch chuẩn (Tương phản)": "Độ phân tán mức xám quanh trung bình (σ)",
+            "Entropy (Độ phong phú chi tiết)": "Lượng thông tin mức xám Shannon (bit)",
+            "Entropy": "Lượng thông tin mức xám Shannon (bit)",
+            "Ngưỡng phân đoạn Otsu (T)": "Ngưỡng tự động tách đối tượng và nền",
+            "Ngưỡng Otsu (T)": "Ngưỡng tự động tách đối tượng và nền",
+            "Tỷ lệ diện tích đối tượng (%)": "% pixel phân loại là đối tượng (vùng trắng)",
+            "Chỉ số tương đồng IoU (Jaccard)": "Tỷ lệ giao / hợp giữa 2 mặt nạ Otsu",
+            "Chỉ số tương đồng IoU": "Tỷ lệ giao / hợp giữa 2 mặt nạ Otsu",
+            "Chỉ số tương đồng Dice (F1)": "Độ trùng khớp 2×giao / tổng diện tích",
+            "Chỉ số tương đồng Dice": "Độ trùng khớp 2×giao / tổng diện tích",
+            "Tỷ lệ pixel sai khác (%)": "% pixel đổi nhãn nền ↔ đối tượng",
+            "Pixel đối tượng mới bổ sung (+)": "Vùng đối tượng phát hiện thêm (xanh lục)",
+            "Pixel đối tượng bị loại trừ (-)": "Vùng đối tượng bị loại bỏ (đỏ cam)",
+            "Pixel đối tượng đồng thuận": "Vùng đối tượng trùng khớp cả 2 lần (trắng)",
+            "IoU so với Ground Truth": "Độ chính xác phân đoạn so với mặt nạ chuẩn",
+            "Dice so với Ground Truth": "Hệ số F1 phân đoạn so với mặt nạ chuẩn",
+            "Phân đoạn Otsu": "Tách đối tượng và nền tự động theo σ²_B(t)",
+        }
+
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.setRowCount(len(data_rows))
+            for r, row in enumerate(data_rows):
+                self.table.setRowHeight(r, 38)
+                metric_name = row[0]
+                is_key = metric_name in key_metrics
+                for c, val in enumerate(row):
+                    item = QTableWidgetItem(val)
+                    if c == 0:
+                        item.setData(Qt.ItemDataRole.UserRole, detail_desc.get(val, ""))
+                        item.setData(Qt.ItemDataRole.UserRole + 1, is_key)
+                    elif c in (1, 2):
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        weight = QFont.Weight.Bold if (is_key and c == 2) else QFont.Weight.Medium
+                        item.setFont(QFont("Segoe UI", 9.5, weight))
+                        item.setForeground(QColor("#1B56B5" if (is_key and c == 2 and val != "-") else "#1E293B"))
                     else:
-                        item.setForeground(QColor("#334155"))
-                self.table.setItem(r, c, item)
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                        item.setFont(QFont("Segoe UI", 9.5, QFont.Weight.Bold if is_key else QFont.Weight.DemiBold))
+                        if any(k in val for k in ("Tăng", "Mở rộng", "Cải thiện")):
+                            item.setForeground(QColor("#0F766E"))
+                        elif "IoU" in metric_name or "Dice" in metric_name:
+                            item.setForeground(QColor("#1B56B5"))
+                        elif "Giảm" in val or val.startswith("-"):
+                            item.setForeground(QColor("#B45309"))
+                        else:
+                            item.setForeground(QColor("#334155"))
+                    self.table.setItem(r, c, item)
+        finally:
+            self.table.setUpdatesEnabled(True)
 
     def zoom(self, title, image):
         if image is not None:

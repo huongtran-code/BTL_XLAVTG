@@ -1,0 +1,50 @@
+[2026-11-23 11:38:35] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 11:38:36] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-23 11:38:37] Áp dụng Kéo giãn tương phản [35..215 → 0..255] thành công trong 58.9 ms.
+[2026-11-23 11:38:38] Phân đoạn Otsu (1108.7 ms): Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=150 | IoU=94.64%, Dice=97.24%, Sai khác=3.30%.
+[2026-11-23 11:38:45] Thực nghiệm hàng loạt 100 ảnh (Kéo giãn tương phản (Tự động Min-Max)) trong 4.56s: Tốt hơn=69 (69.0%), Xấu đi=9 (9.0%), Tương đương=22.
+[2026-11-23 11:41:20] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 11:41:22] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-23 11:41:22] Áp dụng Kéo giãn tương phản [35..215 → 0..255] thành công trong 55.8 ms.
+[2026-11-23 11:41:23] Phân đoạn Otsu (852.0 ms): Ngưỡng gốc T=148, Ngưỡng sau nâng cao T=150 | IoU=94.64%, Dice=97.24%, Sai khác=3.30%.
+[2026-11-23 11:44:07] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 11:50:42] Chọn thư mục thực nghiệm hàng loạt: C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\1-30 (14 ảnh).
+[2026-11-23 11:50:49] Thực nghiệm hàng loạt 14 ảnh (Cân bằng histogram) trong 0.86s: Tốt hơn=2 (14.3%), Xấu đi=11 (78.6%), Tương đương=1.
+[2026-11-23 11:50:57] Mở ảnh thành công: thiếu sáng 11.png (800 x 419 px).
+[2026-11-23 11:50:57] Áp dụng Cân bằng histogram thành công trong 10.1 ms.
+[2026-11-23 11:51:01] Mở ảnh thành công: thiếu sáng 12.png (203 x 135 px).
+[2026-11-23 11:51:01] Áp dụng Cân bằng histogram thành công trong 2.2 ms.
+[2026-11-23 11:51:05] Mở ảnh thành công: thiếu sáng 13.png (800 x 450 px).
+[2026-11-23 11:51:05] Áp dụng Cân bằng histogram thành công trong 12.2 ms.
+[2026-11-23 11:51:10] Mở ảnh thành công: thiếu sáng 14.png (1536 x 1152 px).
+[2026-11-23 11:51:10] Áp dụng Cân bằng histogram thành công trong 49.5 ms.
+[2026-11-23 11:51:22] Thực nghiệm hàng loạt 14 ảnh (Kéo giãn tương phản (Tự động Min-Max)) trong 0.52s: Tốt hơn=1 (7.1%), Xấu đi=1 (7.1%), Tương đương=12.
+[2026-11-23 11:51:25] Mở ảnh thành công: thiếu sáng 11.png (800 x 419 px).
+[2026-11-23 11:51:25] Áp dụng Kéo giãn tương phản [5..229 → 0..255] thành công trong 5.6 ms.
+[2026-11-23 11:51:31] Mở ảnh thành công: thiếu sáng 12.png (203 x 135 px).
+[2026-11-23 11:51:31] Áp dụng Kéo giãn tương phản [0..255 → 0..255] thành công trong 1.7 ms.
+[2026-11-23 11:51:33] Mở ảnh thành công: thiếu sáng 13.png (800 x 450 px).
+[2026-11-23 11:51:33] Áp dụng Kéo giãn tương phản [0..254 → 0..255] thành công trong 5.9 ms.
+[2026-11-23 11:51:43] Mở ảnh thành công: thiếu sáng 15.png (1367 x 2048 px).
+[2026-11-23 11:51:43] Áp dụng Kéo giãn tương phản [6..243 → 0..255] thành công trong 34.9 ms.
+[2026-11-23 11:51:54] Mở ảnh thành công: thiếu sáng 16.png (1500 x 998 px).
+[2026-11-23 11:51:54] Áp dụng Kéo giãn tương phản [0..255 → 0..255] thành công trong 31.9 ms.
+[2026-11-23 11:59:08] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 11:59:09] Thực nghiệm hàng loạt 14 ảnh (Cân bằng histogram) trong 0.43s: Tốt hơn=0 (0.0%), Xấu đi=9 (64.3%), Tương đương=5.
+[2026-11-23 11:59:21] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-23 13:04:35] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 13:04:53] Chọn thư mục thực nghiệm hàng loạt: C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\1-30 (27 ảnh).
+[2026-11-23 13:05:09] Thực nghiệm hàng loạt 27 ảnh (Cân bằng histogram) trong 1.11s: Tốt hơn=15 (55.6%), Xấu đi=11 (40.7%), Tương đương=1.
+[2026-11-23 13:25:58] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-23 13:39:41] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-23 13:39:52] Chọn thư mục thực nghiệm hàng loạt: C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\1-30 (30 ảnh).
+[2026-11-23 13:39:58] Thực nghiệm hàng loạt 30 ảnh (Cân bằng histogram) trong 2.54s: Tốt hơn=18 (60.0%), Xấu đi=11 (36.7%), Tương đương=1.
+[2026-11-23 13:40:11] Mở ảnh thành công: tương phản gắt 24.png (1408 x 768 px).
+[2026-11-23 13:40:11] Áp dụng Cân bằng histogram thành công trong 16.2 ms.
+[2026-11-23 13:40:15] Mở ảnh thành công: tương phản gắt 25.jpg (312 x 230 px).
+[2026-11-23 13:40:15] Áp dụng Cân bằng histogram thành công trong 2.7 ms.
+[2026-11-23 13:40:17] Mở ảnh thành công: tương phản gắt 26.jpg (321 x 230 px).
+[2026-11-23 13:40:17] Áp dụng Cân bằng histogram thành công trong 2.5 ms.
+[2026-11-23 13:40:19] Mở ảnh thành công: tương phản gắt 27.jpg (220 x 221 px).
+[2026-11-23 13:40:19] Áp dụng Cân bằng histogram thành công trong 1.5 ms.
+[2026-11-23 13:40:29] Đóng ứng dụng và kết thúc phiên làm việc.

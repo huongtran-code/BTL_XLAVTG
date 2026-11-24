@@ -1,0 +1,37 @@
+[2026-11-24 15:02:41] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 15:06:17] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 1.35s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-24 15:34:28] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 15:34:29] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-24 15:34:30] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 1.29s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-24 15:34:30] Mở ảnh thành công: 001_thieu_sang_01.png (480 x 320 px).
+[2026-11-24 15:34:30] Áp dụng Cân bằng histogram thành công trong 3.0 ms.
+[2026-11-24 15:43:29] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 15:43:31] Thực nghiệm hàng loạt 100 ảnh (Cân bằng histogram) trong 1.45s: Tốt hơn=76 (76.0%), Xấu đi=11 (11.0%), Tương đương=13.
+[2026-11-24 15:43:31] Mở ảnh thành công: 001_thieu_sang_01.png (480 x 320 px).
+[2026-11-24 15:43:31] Áp dụng Cân bằng histogram thành công trong 3.7 ms.
+[2026-11-24 15:45:24] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-24 15:45:29] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 15:47:45] Chọn thư mục thực nghiệm hàng loạt: C:\Users\LENOVO\OneDrive\Documents\BTL_XLAVTG\De13_BTL\1-30 (30 ảnh).
+[2026-11-24 15:47:53] Thực nghiệm hàng loạt 30 ảnh (Cân bằng histogram) trong 1.37s: Tốt hơn=18 (60.0%), Xấu đi=11 (36.7%), Tương đương=1.
+[2026-11-24 15:48:00] Mở ảnh thành công: 1.jpg (3840 x 2160 px).
+[2026-11-24 15:48:01] Áp dụng Cân bằng histogram thành công trong 129.4 ms.
+[2026-11-24 15:48:27] Mở ảnh thành công: 1.jpg (3840 x 2160 px).
+[2026-11-24 15:48:45] Đóng ứng dụng và kết thúc phiên làm việc.
+[2026-11-24 17:36:23] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 17:36:25] Mở ảnh thành công: thiennhien.jpg (1728 x 1080 px).
+[2026-11-24 17:36:26] Áp dụng CLAHE (clip=2.0, lưới=8×8) thành công trong 1195.9 ms.
+[2026-11-24 17:36:28] Áp dụng Gamma (γ=0.65) thành công trong 138.3 ms.
+[2026-11-24 17:42:06] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 17:42:07] Thực nghiệm hàng loạt 7 ảnh (CLAHE (clip=2.0, lưới=8×8)) trong 0.58s: Tốt hơn=6 (85.7%), Xấu đi=1 (14.3%), Tương đương=0.
+[2026-11-24 17:43:42] Khởi động hệ thống xử lý ảnh Đề tài 13.
+[2026-11-24 17:44:35] Mở ảnh thành công: 1.jpg (3840 x 2160 px).
+[2026-11-24 17:45:42] Áp dụng CLAHE (clip=6.1, lưới=10×10) thành công trong 266.7 ms.
+[2026-11-24 17:45:47] Áp dụng CLAHE (clip=6.1, lưới=6×6) thành công trong 345.5 ms.
+[2026-11-24 17:45:53] Áp dụng CLAHE (clip=10.0, lưới=16×16) thành công trong 282.3 ms.
+[2026-11-24 17:46:16] Áp dụng CLAHE (clip=2.0, lưới=8×8) thành công trong 290.5 ms.
+[2026-11-24 17:46:26] Áp dụng Gamma (γ=3.50) thành công trong 78.8 ms.
+[2026-11-24 17:46:31] Áp dụng Gamma (γ=1.60) thành công trong 82.4 ms.
+[2026-11-24 17:46:35] Áp dụng Gamma (γ=0.60) thành công trong 83.6 ms.
+[2026-11-24 17:46:40] Áp dụng Gamma (γ=1.00) thành công trong 80.6 ms.
+[2026-11-24 17:46:42] Áp dụng Gamma (γ=1.00) thành công trong 81.8 ms.
+[2026-11-24 17:46:46] Đóng ứng dụng và kết thúc phiên làm việc.
